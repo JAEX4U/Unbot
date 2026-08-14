@@ -266,12 +266,6 @@ async def gencode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     code, created_at, expires_at = create_code(admin.id)
 
     await update.effective_message.reply_text(
-        f"✅ Code generated: `{code}`\n"
-        f"Expires: {expires_at.strftime('%I:%M%p UTC')}\n\n"
-        "👇 Forward the message below to the user:",
-        parse_mode=ParseMode.MARKDOWN,
-    )
-    await update.effective_message.reply_text(
         forwardable_code_message(code, admin, created_at, expires_at),
         parse_mode=ParseMode.MARKDOWN,
     )
@@ -395,7 +389,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if query.data == "admin_gencode":
         code, created_at, expires_at = create_code(admin_user.id)
         await query.edit_message_text(
-            f"✅ Code generated: `{code}`\nExpires: {expires_at.strftime('%I:%M%p UTC')}",
+            "🛠 *Admin Panel*\n\nChoose an action:",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=admin_menu_keyboard(),
         )
@@ -535,49 +529,4 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if is_user_banned(query.from_user.id):
         await query.edit_message_text("⛔ You've been banned from using this bot.")
-        return
-
-    if not is_user_verified(query.from_user.id):
-        await query.edit_message_text("⛔ You need to /link your code first.")
-        return
-
-    if query.data == "menu_account":
-        await query.edit_message_text(
-            f"📋 *My Account*\n\nUser ID: `{query.from_user.id}`\nStatus: Verified ✅",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=main_menu_keyboard(),
-        )
-    elif query.data == "menu_help":
-        await query.edit_message_text(
-            "ℹ️ *Help*\n\nThis is a placeholder menu — add your real features here.",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=main_menu_keyboard(),
-        )
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-def main() -> None:
-    init_db()
-
-    app = Application.builder().token(config.BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("gencode", gencode))
-    app.add_handler(CommandHandler("link", link))
-    app.add_handler(CommandHandler("whoami", whoami))
-    app.add_handler(CommandHandler("admin", admin))
-    app.add_handler(CommandHandler("cancel", admin_cancel))
-    app.add_handler(CallbackQueryHandler(admin_callback, pattern=r"^admin_"))
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^menu_"))
-    # Catches the admin's follow-up message after Broadcast/Ban/Unban.
-    # No-ops for everyone else (see admin_text_input).
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_text_input))
-
-    logger.info("Bot starting...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
-
-
-if __name__ == "__main__":
-    main()
+        r
