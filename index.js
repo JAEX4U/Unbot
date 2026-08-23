@@ -1,7 +1,9 @@
+// index.js
 require('dotenv').config({ path: 'un.env' });
 const { Bot, InlineKeyboard } = require('grammy');
 const mongoose = require('mongoose');
 const express = require('express');
+const { setupAdminCommands } = require('./admin');
 
 // 1. Connect to MongoDB Atlas
 const mongoUri = process.env.MONGO_URI;
@@ -40,8 +42,6 @@ const AccessCode = mongoose.model('AccessCode', codeSchema);
 
 // 3. Initialize Telegram Bot
 const botToken = process.env.BOT_TOKEN;
-const adminId = Number(process.env.ADMIN_TELEGRAM_ID || 0);
-
 if (!botToken) {
   console.error('CRITICAL: BOT_TOKEN is missing!');
   process.exit(1);
@@ -55,9 +55,9 @@ bot.catch((err) => {
 });
 
 // --- ANTI-SPAM SYSTEM ---
-const userCooldowns = new Map(); // Stores timestamp & warning status per user ID
-const RATE_LIMIT_MS = 1500;       // Minimum time between requests (1.5 seconds)
-const LOCKOUT_MS = 5000;          // Lockout penalty duration if spamming (5 seconds)
+const userCooldowns = new Map();
+const RATE_LIMIT_MS = 1500;
+const LOCKOUT_MS = 5000;
 
 bot.use(async (ctx, next) => {
   if (!ctx.from) return await next();
@@ -66,17 +66,15 @@ bot.use(async (ctx, next) => {
   const now = Date.now();
   const userState = userCooldowns.get(userId) || { lastTime: 0, warned: false, lockUntil: 0 };
 
-  // 1. Check if user is currently locked out for spamming
   if (now < userState.lockUntil) {
     if (ctx.callbackQuery) {
       await ctx.answerCallbackQuery().catch(() => {});
     }
-    return; // Silently ignore rapid spammed requests
+    return;
   }
 
-  // 2. Check if request came too fast
   if (now - userState.lastTime < RATE_LIMIT_MS) {
-    userState.lockUntil = now + LOCKOUT_MS; // Lockout user for 5s
+    userState.lockUntil = now + LOCKOUT_MS;
 
     if (!userState.warned) {
       userState.warned = true;
@@ -96,9 +94,7 @@ bot.use(async (ctx, next) => {
     return;
   }
 
-  // Reset state if valid request speed
   userCooldowns.set(userId, { lastTime: now, warned: false, lockUntil: 0 });
-
   await next();
 });
 
@@ -122,7 +118,7 @@ bot.use(async (ctx, next) => {
   await next();
 });
 
-// Helper: Main Menu Inline Keyboard (Includes Help)
+// Helper: Keyboards
 function getMainMenuKeyboard() {
   return new InlineKeyboard()
     .text('👤 My Profile', 'btn_profile')
@@ -133,13 +129,11 @@ function getMainMenuKeyboard() {
     .text('❓ Help', 'btn_help');
 }
 
-// Helper: Back Button Keyboard
 function getBackKeyboard() {
-  return new InlineKeyboard()
-    .text('🔙 Back to Main Menu', 'btn_back');
+  return new InlineKeyboard().text('🔙 Back to Main Menu', 'btn_back');
 }
 
-// Helper: Find User by ID, Username, or Access Code
+// Helper: Query User
 async function findUserByQuery(query) {
   const cleanQuery = query.trim().replace(/^@/, '');
   
@@ -159,7 +153,7 @@ async function findUserByQuery(query) {
   });
 }
 
-// Helper: Format User Profile/Info Output (HTML Mode - Safe against underscores)
+// Helper: Format User Profile
 function formatUserInfo(user) {
   const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ') || 'User';
   const usernameDisplay = user.username && user.username !== 'No Username' ? `@${user.username}` : 'Not set';
@@ -181,7 +175,11 @@ function formatUserInfo(user) {
          `━━━━━━━━━━━━━━━━━━━━`;
 }
 
-// Command: /start
+// --- INITIALIZE ADMIN MODULE ---
+setupAdminCommands(bot, { User, AccessCode }, findUserByQuery);
+
+// --- USER COMMANDS & HANDLERS ---
+
 bot.command('start', async (ctx) => {
   const user = await User.findOne({ telegramId: ctx.from.id });
 
@@ -202,7 +200,6 @@ bot.command('start', async (ctx) => {
   );
 });
 
-// Public Command: /info <accessCode | telegramId | @username>
 bot.command('info', async (ctx) => {
   const query = ctx.match.trim();
 
@@ -220,199 +217,6 @@ bot.command('info', async (ctx) => {
   await ctx.reply(formatUserInfo(targetUser), { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
 });
 
-// --- ADMIN COMMANDS ---
-
-function isAdmin(ctx) {
-  if (ctx.from.id !== adminId && adminId !== 0) {
-    ctx.reply('❌ Unauthorized: Admin access only.');
-    return false;
-  }
-  return true;
-}
-
-// Admin Panel Dashboard: /admin
-bot.command('admin', async (ctx) => {
-  if (!isAdmin(ctx)) return;
-
-  const totalUsers = await User.countDocuments();
-  const totalCodes = await AccessCode.countDocuments();
-  const unusedCodes = await AccessCode.countDocuments({ isUsed: false });
-  const bannedUsers = await User.countDocuments({ isBanned: true });
-  const suspendedUsers = await User.countDocuments({ isSuspended: true });
-
-  const adminText = 
-    `🛠️ <b>ADMIN PANEL DASHBOARD</b>\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `👥 <b>Total Users:</b> ${totalUsers}\n` +
-    `🔴 <b>Banned:</b> ${bannedUsers} | 🟡 <b>Suspended:</b> ${suspendedUsers}\n` +
-    `🔑 <b>Total Codes:</b> ${totalCodes} (🟢 <b>Unused:</b> ${unusedCodes})\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `<b>Admin Commands:</b>\n` +
-    `• <code>/val &lt;6-digit-code&gt;</code> - Create access code\n` +
-    `• <code>/codes</code> - View generated codes\n` +
-    `• <code>/ban &lt;id|code|@user&gt;</code> - Ban a user\n` +
-    `• <code>/unban &lt;id|code|@user&gt;</code> - Unban/Unsuspend user\n` +
-    `• <code>/suspend &lt;id|code|@user&gt;</code> - Suspend a user\n` +
-    `• <code>/addpoints &lt;id&gt; &lt;amount&gt;</code> - Add points\n` +
-    `• <code>/removepoints &lt;id&gt; &lt;amount&gt;</code> - Deduct points\n` +
-    `• <code>/broadcast &lt;message&gt;</code> - Send message to all`;
-
-  await ctx.reply(adminText, { parse_mode: 'HTML' });
-});
-
-// Admin Command: /ban <id | code | @username>
-bot.command('ban', async (ctx) => {
-  if (!isAdmin(ctx)) return;
-  const query = ctx.match.trim();
-  if (!query) return ctx.reply('⚠️ Usage: <code>/ban &lt;telegram_id | access_code | @username&gt;</code>', { parse_mode: 'HTML' });
-
-  const user = await findUserByQuery(query);
-  if (!user) return ctx.reply('❌ User not found.');
-
-  user.isBanned = true;
-  user.isSuspended = false;
-  await user.save();
-
-  await ctx.reply(`🔴 User <b>${user.firstName}</b> (<code>${user.telegramId}</code>) is now <b>BANNED</b>.`, { parse_mode: 'HTML' });
-});
-
-// Admin Command: /unban <id | code | @username>
-bot.command('unban', async (ctx) => {
-  if (!isAdmin(ctx)) return;
-  const query = ctx.match.trim();
-  if (!query) return ctx.reply('⚠️ Usage: <code>/unban &lt;telegram_id | access_code | @username&gt;</code>', { parse_mode: 'HTML' });
-
-  const user = await findUserByQuery(query);
-  if (!user) return ctx.reply('❌ User not found.');
-
-  user.isBanned = false;
-  user.isSuspended = false;
-  await user.save();
-
-  await ctx.reply(`🟢 User <b>${user.firstName}</b> (<code>${user.telegramId}</code>) has been <b>UNBANNED / RESTORED</b>.`, { parse_mode: 'HTML' });
-});
-
-// Admin Command: /suspend <id | code | @username>
-bot.command('suspend', async (ctx) => {
-  if (!isAdmin(ctx)) return;
-  const query = ctx.match.trim();
-  if (!query) return ctx.reply('⚠️ Usage: <code>/suspend &lt;telegram_id | access_code | @username&gt;</code>', { parse_mode: 'HTML' });
-
-  const user = await findUserByQuery(query);
-  if (!user) return ctx.reply('❌ User not found.');
-
-  user.isSuspended = true;
-  user.isBanned = false;
-  await user.save();
-
-  await ctx.reply(`🟡 User <b>${user.firstName}</b> (<code>${user.telegramId}</code>) is now <b>SUSPENDED</b>.`, { parse_mode: 'HTML' });
-});
-
-// Admin Command: /val 888888
-bot.command('val', async (ctx) => {
-  if (!isAdmin(ctx)) return;
-
-  const codeArg = ctx.match.trim();
-  if (!codeArg || codeArg.length !== 6 || isNaN(codeArg)) {
-    return ctx.reply('⚠️ Please specify a valid 6-digit numeric code. Example: <code>/val 888888</code>', { parse_mode: 'HTML' });
-  }
-
-  try {
-    const existingCode = await AccessCode.findOne({ code: codeArg });
-    if (existingCode) {
-      return ctx.reply('⚠️ This code already exists in the database.');
-    }
-
-    await AccessCode.create({ code: codeArg, createdBy: ctx.from.id });
-    await ctx.reply(`✅ <b>Access Code Created:</b> <code>${codeArg}</code>\nUsers can now register using <code>/login ${codeArg}</code>`, { parse_mode: 'HTML' });
-  } catch (err) {
-    await ctx.reply('❌ Error generating access code.');
-  }
-});
-
-// Admin Command: /codes
-bot.command('codes', async (ctx) => {
-  if (!isAdmin(ctx)) return;
-
-  const codes = await AccessCode.find().sort({ createdAt: -1 }).limit(20);
-  if (codes.length === 0) return ctx.reply('No access codes found.');
-
-  let message = `🔑 <b>Access Codes List (Latest 20):</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
-  codes.forEach(c => {
-    const status = c.isUsed ? `🔴 Used (by <code>${c.usedByTelegramId}</code>)` : `🟢 Unused`;
-    message += `• Code: <code>${c.code}</code> | ${status}\n`;
-  });
-
-  await ctx.reply(message, { parse_mode: 'HTML' });
-});
-
-// Admin Command: /addpoints <id|code|username> <amount>
-bot.command('addpoints', async (ctx) => {
-  if (!isAdmin(ctx)) return;
-
-  const args = ctx.match.trim().split(' ');
-  const targetQuery = args[0];
-  const amount = Number(args[1]);
-
-  if (!targetQuery || isNaN(amount)) {
-    return ctx.reply('⚠️ Usage: <code>/addpoints &lt;user_id|code|@username&gt; &lt;amount&gt;</code>\nExample: <code>/addpoints 123456789 500</code>', { parse_mode: 'HTML' });
-  }
-
-  const user = await findUserByQuery(targetQuery);
-  if (!user) return ctx.reply('❌ User not found.');
-
-  user.points += amount;
-  await user.save();
-
-  await ctx.reply(`✅ Added <b>${amount} points</b> to <b>${user.firstName}</b> (<code>${user.telegramId}</code>).\nNew Balance: <b>${user.points} points</b>`, { parse_mode: 'HTML' });
-});
-
-// Admin Command: /removepoints <id|code|username> <amount>
-bot.command('removepoints', async (ctx) => {
-  if (!isAdmin(ctx)) return;
-
-  const args = ctx.match.trim().split(' ');
-  const targetQuery = args[0];
-  const amount = Number(args[1]);
-
-  if (!targetQuery || isNaN(amount)) {
-    return ctx.reply('⚠️ Usage: <code>/removepoints &lt;user_id|code|@username&gt; &lt;amount&gt;</code>\nExample: <code>/removepoints 123456789 200</code>', { parse_mode: 'HTML' });
-  }
-
-  const user = await findUserByQuery(targetQuery);
-  if (!user) return ctx.reply('❌ User not found.');
-
-  user.points = Math.max(0, user.points - amount);
-  await user.save();
-
-  await ctx.reply(`✅ Deducted <b>${amount} points</b> from <b>${user.firstName}</b> (<code>${user.telegramId}</code>).\nNew Balance: <b>${user.points} points</b>`, { parse_mode: 'HTML' });
-});
-
-// Admin Command: /broadcast <message>
-bot.command('broadcast', async (ctx) => {
-  if (!isAdmin(ctx)) return;
-
-  const broadcastMsg = ctx.match.trim();
-  if (!broadcastMsg) return ctx.reply('⚠️ Usage: <code>/broadcast &lt;your message here&gt;</code>', { parse_mode: 'HTML' });
-
-  const users = await User.find({ isBanned: false }, 'telegramId');
-  let successCount = 0;
-
-  for (const u of users) {
-    try {
-      await bot.api.sendMessage(u.telegramId, `📢 <b>ANNOUNCEMENT</b>\n\n${broadcastMsg}`, { parse_mode: 'HTML' });
-      successCount++;
-    } catch (e) {
-      // User blocked bot
-    }
-  }
-
-  await ctx.reply(`✅ Broadcast sent to <b>${successCount}/${users.length}</b> active users.`, { parse_mode: 'HTML' });
-});
-
-// --- USER COMMANDS & BUTTON HANDLERS ---
-
-// User Command: /login 888888
 bot.command('login', async (ctx) => {
   const codeInput = ctx.match.trim();
 
@@ -463,46 +267,31 @@ bot.command('login', async (ctx) => {
   );
 });
 
-// Handle "My Profile" Button
 bot.callbackQuery('btn_profile', async (ctx) => {
   try {
-    const telegramId = Number(ctx.from.id);
-    const user = await User.findOne({ telegramId });
-
+    const user = await User.findOne({ telegramId: Number(ctx.from.id) });
     if (!user) {
-      await ctx.answerCallbackQuery({
-        text: '❌ Account not found. Please log in using /login <code> first.',
-        show_alert: true
-      });
+      await ctx.answerCallbackQuery({ text: '❌ Account not found. Please log in using /login <code> first.', show_alert: true });
       return;
     }
-
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText(formatUserInfo(user), {
-      parse_mode: 'HTML',
-      reply_markup: getBackKeyboard()
-    });
+    await ctx.editMessageText(formatUserInfo(user), { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
   } catch (err) {
-    console.error('Error in btn_profile handler:', err);
+    console.error('Error in btn_profile:', err);
     await ctx.answerCallbackQuery({ text: '⚠️ An error occurred.', show_alert: true }).catch(() => {});
   }
 });
 
-// Handle "Back to Main Menu" Button
 bot.callbackQuery('btn_back', async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     const fullName = ctx.from.first_name || 'User';
-    await ctx.editMessageText(
-      `Welcome back, ${fullName}! 👋\nSelect an option from the menu below:`,
-      { reply_markup: getMainMenuKeyboard() }
-    );
+    await ctx.editMessageText(`Welcome back, ${fullName}! 👋\nSelect an option from the menu below:`, { reply_markup: getMainMenuKeyboard() });
   } catch (err) {
-    console.error('Error in btn_back handler:', err);
+    console.error('Error in btn_back:', err);
   }
 });
 
-// Handle "Daily Bonus" Button
 bot.callbackQuery('btn_daily', async (ctx) => {
   const user = await User.findOne({ telegramId: ctx.from.id });
   if (!user) return ctx.answerCallbackQuery({ text: 'Please log in first using /login <code>' });
@@ -525,7 +314,6 @@ bot.callbackQuery('btn_daily', async (ctx) => {
   await ctx.reply(`🎁 You claimed <b>50 daily points</b>! New Balance: <b>${user.points} points</b>`, { parse_mode: 'HTML' });
 });
 
-// Handle "Referral Link" Button
 bot.callbackQuery('btn_referral', async (ctx) => {
   const user = await User.findOne({ telegramId: ctx.from.id });
   if (!user) return ctx.answerCallbackQuery({ text: 'Please log in first using /login <code>' });
@@ -540,7 +328,6 @@ bot.callbackQuery('btn_referral', async (ctx) => {
   });
 });
 
-// Handle "Help" Button with Admin Contact
 bot.callbackQuery('btn_help', async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
@@ -563,12 +350,12 @@ bot.callbackQuery('btn_help', async (ctx) => {
       reply_markup: getBackKeyboard()
     });
   } catch (err) {
-    console.error('Error in btn_help handler:', err);
+    console.error('Error in btn_help:', err);
     await ctx.answerCallbackQuery({ text: '⚠️ An error occurred.', show_alert: true }).catch(() => {});
   }
 });
 
-// Start Telegram Bot safely with long polling
+// Start Bot
 bot.start({
   drop_pending_updates: true,
   onStart: (botInfo) => console.log(`Telegram Bot @${botInfo.username} engine is running...`)
