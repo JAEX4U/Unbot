@@ -116,10 +116,20 @@ async function findUserByQuery(query) {
 }
 
 // index.js
+
+// Add error handling to prevent unhandled crashes
+bot.catch((err) => {
+  console.error('Bot Error:', err);
+});
+
+// Start bot with drop_pending_updates
 bot.start({
   drop_pending_updates: true,
-  onStart: (botInfo) => console.log(`Bot @${botInfo.username} started!`)
+  onStart: (botInfo) => {
+    console.log(`Bot @${botInfo.username} started successfully!`);
+  }
 });
+
 // --- REGISTER MODULES ---
 setupAdminCommands(bot, findUserByQuery);
 setupUserCommands(bot, findUserByQuery);
