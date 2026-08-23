@@ -129,6 +129,20 @@ bot.command('login', async (ctx) => {
     return ctx.reply('❌ Invalid or already used access code. Please check with the admin.');
   }
 
+// Catch bot errors gracefully instead of crashing
+bot.catch((err) => {
+  const ctx = err.ctx;
+  console.error(`Error while handling update ${ctx.update.update_id}:`);
+  console.error(err.error);
+});
+
+// Connect to MongoDB Atlas with connection settings
+const mongoUri = process.env.MONGO_URI;
+mongoose.connect(mongoUri, {
+  serverSelectionTimeoutMS: 5000 // Timeout after 5s instead of buffering indefinitely
+})
+  .then(() => console.log('Successfully connected to MongoDB Atlas!'))
+  .catch(err => console.error('MongoDB connection error:', err));
   // Mark code as used
   validCode.isUsed = true;
   validCode.usedByTelegramId = ctx.from.id;
