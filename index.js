@@ -200,9 +200,10 @@ bot.callbackQuery('btn_referral', async (ctx) => {
   await ctx.reply(`👥 *Your Referral Link:*\n\`${refLink}\`\n\nShare this link to earn bonus points when friends join!`, { parse_mode: 'Markdown' });
 });
 
-// Start Telegram Bot
+// Start Telegram Bot safely with long polling
 bot.start({
-  onStart: () => console.log('Telegram Bot engine is running...')
+  drop_pending_updates: true,
+  onStart: (botInfo) => console.log(`Telegram Bot @${botInfo.username} engine is running...`)
 });
 
 // 4. Express REST API Server
