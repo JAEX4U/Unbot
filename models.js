@@ -1,27 +1,39 @@
 // models.js
 const mongoose = require('mongoose');
 
+// 1. User Schema
 const userSchema = new mongoose.Schema({
   telegramId: { type: Number, required: true, unique: true },
-  username: { type: String, default: '' },
+  accessCode: { type: String, required: true },
+  username: { type: String, default: 'No Username' },
   firstName: { type: String, default: '' },
   lastName: { type: String, default: '' },
   points: { type: Number, default: 0 },
-  accessCode: { type: String, required: true },
-  referredBy: { type: Number, default: null },
-  lastDailyClaim: { type: Date, default: null },
   isBanned: { type: Boolean, default: false },
-  isSuspended: { type: Boolean, default: false }
+  isSuspended: { type: Boolean, default: false },
+  lastDailyClaim: { type: Date, default: null }
 }, { timestamps: true });
 
-const codeSchema = new mongoose.Schema({
+// 2. Access Code Schema
+const accessCodeSchema = new mongoose.Schema({
   code: { type: String, required: true, unique: true },
   isUsed: { type: Boolean, default: false },
-  createdBy: { type: Number, required: true },
-  usedByTelegramId: { type: Number, default: null }
+  usedByTelegramId: { type: Number, default: null },
+  createdBy: { type: Number, required: true }
 }, { timestamps: true });
 
-const User = mongoose.model('User', userSchema);
-const AccessCode = mongoose.model('AccessCode', codeSchema);
+// 3. Ad Campaign Schema (Adsgram / Sponsor Ads History)
+const adCampaignSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  content: { type: String, required: true },
+  createdBy: { type: Number, required: true },
+  status: { type: String, enum: ['draft', 'active', 'completed'], default: 'active' },
+  sentCount: { type: Number, default: 0 },
+  totalTargeted: { type: Number, default: 0 }
+}, { timestamps: true });
 
-module.exports = { User, AccessCode };
+const User = mongoose.models.User || mongoose.model('User', userSchema);
+const AccessCode = mongoose.models.AccessCode || mongoose.model('AccessCode', accessCodeSchema);
+const AdCampaign = mongoose.models.AdCampaign || mongoose.model('AdCampaign', adCampaignSchema);
+
+module.exports = { User, AccessCode, AdCampaign };
