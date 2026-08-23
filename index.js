@@ -54,7 +54,55 @@ bot.catch((err) => {
   console.error(err.error);
 });
 
-// Global Middleware: Check if user is Banned or Suspended
+// --- ANTI-SPAM SYSTEM ---
+const userCooldowns = new Map(); // Stores timestamp & warning status per user ID
+const RATE_LIMIT_MS = 1500;       // Minimum time between requests (1.5 seconds)
+const LOCKOUT_MS = 5000;          // Lockout penalty duration if spamming (5 seconds)
+
+bot.use(async (ctx, next) => {
+  if (!ctx.from) return await next();
+
+  const userId = ctx.from.id;
+  const now = Date.now();
+  const userState = userCooldowns.get(userId) || { lastTime: 0, warned: false, lockUntil: 0 };
+
+  // 1. Check if user is currently locked out for spamming
+  if (now < userState.lockUntil) {
+    if (ctx.callbackQuery) {
+      await ctx.answerCallbackQuery().catch(() => {});
+    }
+    return; // Silently ignore rapid spammed requests
+  }
+
+  // 2. Check if request came too fast
+  if (now - userState.lastTime < RATE_LIMIT_MS) {
+    userState.lockUntil = now + LOCKOUT_MS; // Lockout user for 5s
+
+    if (!userState.warned) {
+      userState.warned = true;
+      userCooldowns.set(userId, userState);
+
+      if (ctx.callbackQuery) {
+        await ctx.answerCallbackQuery({
+          text: '⚠️ Please slow down! Don\'t spam buttons.',
+          show_alert: true
+        }).catch(() => {});
+      } else {
+        await ctx.reply('⚠️ *Slow down!* Please wait a few seconds before sending another request.', {
+          parse_mode: 'Markdown'
+        }).catch(() => {});
+      }
+    }
+    return;
+  }
+
+  // Reset state if valid request speed
+  userCooldowns.set(userId, { lastTime: now, warned: false, lockUntil: 0 });
+
+  await next();
+});
+
+// --- GLOBAL BAN / SUSPEND CHECK ---
 bot.use(async (ctx, next) => {
   if (!ctx.from) return await next();
 
@@ -78,10 +126,15 @@ bot.use(async (ctx, next) => {
 function getMainMenuKeyboard() {
   return new InlineKeyboard()
     .text('👤 My Profile', 'btn_profile')
-    .text('🪙 My Balance', 'btn_balance')
     .row()
     .text('🎁 Daily Bonus', 'btn_daily')
     .text('👥 Referral Link', 'btn_referral');
+}
+
+// Helper: Back Button Keyboard
+function getBackKeyboard() {
+  return new InlineKeyboard()
+    .text('🔙 Back to Main Menu', 'btn_back');
 }
 
 // Helper: Find User by ID, Username, or Access Code
@@ -114,7 +167,7 @@ function formatUserInfo(user) {
   if (user.isBanned) statusText = '🔴 Banned';
   else if (user.isSuspended) statusText = '🟡 Suspended';
 
-  return `🔍 *USER INFORMATION*\n` +
+  return `👤 *USER PROFILE DETAILS*\n` +
          `━━━━━━━━━━━━━━━━━━━━\n` +
          `📛 *Name:* ${fullName}\n` +
          `🆔 *ID (Access Code):* \`${user.accessCode}\`\n` +
@@ -152,10 +205,9 @@ bot.command('info', async (ctx) => {
   const query = ctx.match.trim();
 
   if (!query) {
-    // If no argument provided, show caller's own info
     const selfUser = await User.findOne({ telegramId: ctx.from.id });
     if (!selfUser) return ctx.reply('⚠️ Please provide an Access Code, Telegram ID, or Username.\nExample: `/info 888888` or `/info @username`', { parse_mode: 'Markdown' });
-    return ctx.reply(formatUserInfo(selfUser), { parse_mode: 'Markdown' });
+    return ctx.reply(formatUserInfo(selfUser), { parse_mode: 'Markdown', reply_markup: getBackKeyboard() });
   }
 
   const targetUser = await findUserByQuery(query);
@@ -163,7 +215,7 @@ bot.command('info', async (ctx) => {
     return ctx.reply('❌ User not found in database.', { parse_mode: 'Markdown' });
   }
 
-  await ctx.reply(formatUserInfo(targetUser), { parse_mode: 'Markdown' });
+  await ctx.reply(formatUserInfo(targetUser), { parse_mode: 'Markdown', reply_markup: getBackKeyboard() });
 });
 
 // --- ADMIN COMMANDS ---
@@ -349,7 +401,7 @@ bot.command('broadcast', async (ctx) => {
       await bot.api.sendMessage(u.telegramId, `📢 *ANNOUNCEMENT*\n\n${broadcastMsg}`, { parse_mode: 'Markdown' });
       successCount++;
     } catch (e) {
-      // User blocked bot or invalid ID
+      // User blocked bot
     }
   }
 
@@ -411,20 +463,41 @@ bot.command('login', async (ctx) => {
 
 // Handle "My Profile" Button
 bot.callbackQuery('btn_profile', async (ctx) => {
-  const user = await User.findOne({ telegramId: ctx.from.id });
-  if (!user) return ctx.answerCallbackQuery({ text: 'Please log in first using /login <code>' });
+  try {
+    const telegramId = Number(ctx.from.id);
+    const user = await User.findOne({ telegramId });
 
-  await ctx.answerCallbackQuery();
-  await ctx.reply(formatUserInfo(user), { parse_mode: 'Markdown' });
+    if (!user) {
+      await ctx.answerCallbackQuery({
+        text: '❌ Account not found. Please log in using /login <code> first.',
+        show_alert: true
+      });
+      return;
+    }
+
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(formatUserInfo(user), {
+      parse_mode: 'Markdown',
+      reply_markup: getBackKeyboard()
+    });
+  } catch (err) {
+    console.error('Error in btn_profile handler:', err);
+    await ctx.answerCallbackQuery({ text: '⚠️ An error occurred.', show_alert: true }).catch(() => {});
+  }
 });
 
-// Handle "My Balance" Button
-bot.callbackQuery('btn_balance', async (ctx) => {
-  const user = await User.findOne({ telegramId: ctx.from.id });
-  if (!user) return ctx.answerCallbackQuery({ text: 'Please log in first using /login <code>' });
-
-  await ctx.answerCallbackQuery();
-  await ctx.reply(`🪙 *Balance Details*\n\nTelegram ID: \`${user.telegramId}\`\nCurrent Points: *${user.points}*`, { parse_mode: 'Markdown' });
+// Handle "Back to Main Menu" Button
+bot.callbackQuery('btn_back', async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const fullName = ctx.from.first_name || 'User';
+    await ctx.editMessageText(
+      `Welcome back, ${fullName}! 👋\nSelect an option from the menu below:`,
+      { reply_markup: getMainMenuKeyboard() }
+    );
+  } catch (err) {
+    console.error('Error in btn_back handler:', err);
+  }
 });
 
 // Handle "Daily Bonus" Button
@@ -459,7 +532,10 @@ bot.callbackQuery('btn_referral', async (ctx) => {
   const refLink = `https://t.me/${botInfo.username}?start=ref_${user.telegramId}`;
 
   await ctx.answerCallbackQuery();
-  await ctx.reply(`👥 *Your Referral Link:*\n\`${refLink}\`\n\nShare this link to earn bonus points when friends join!`, { parse_mode: 'Markdown' });
+  await ctx.reply(`👥 *Your Referral Link:*\n\`${refLink}\`\n\nShare this link to earn bonus points when friends join!`, {
+    parse_mode: 'Markdown',
+    reply_markup: getBackKeyboard()
+  });
 });
 
 // Start Telegram Bot safely with long polling
