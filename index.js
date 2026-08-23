@@ -10,11 +10,10 @@ if (!mongoUri) {
   process.exit(1);
 }
 
-mongoose.connect(mongoUri)
+mongoose.connect(mongoUri, { serverSelectionTimeoutMS: 5000 })
   .then(() => console.log('Successfully connected to MongoDB Atlas!'))
   .catch(err => {
     console.error('MongoDB connection error:', err);
-    process.exit(1);
   });
 
 // 2. Define Schema with Admin Codes & User Details
@@ -22,6 +21,7 @@ const userSchema = new mongoose.Schema({
   telegramId: { type: Number, required: true, unique: true },
   username: { type: String, default: '' },
   firstName: { type: String, default: '' },
+  lastName: { type: String, default: '' },
   points: { type: Number, default: 0 },
   accessCode: { type: String, required: true },
   referredBy: { type: Number, default: null },
@@ -49,12 +49,19 @@ if (!botToken) {
 
 const bot = new Bot(botToken);
 
+// Catch bot errors gracefully instead of crashing
+bot.catch((err) => {
+  console.error(`Error while handling update ${err.ctx.update.update_id}:`);
+  console.error(err.error);
+});
+
 // Helper: Main Menu Inline Keyboard Buttons
 function getMainMenuKeyboard() {
   return new InlineKeyboard()
+    .text('👤 My Profile', 'btn_profile')
     .text('🪙 My Balance', 'btn_balance')
-    .text('🎁 Daily Bonus', 'btn_daily')
     .row()
+    .text('🎁 Daily Bonus', 'btn_daily')
     .text('👥 Referral Link', 'btn_referral');
 }
 
@@ -63,8 +70,9 @@ bot.command('start', async (ctx) => {
   const user = await User.findOne({ telegramId: ctx.from.id });
 
   if (user) {
+    const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ') || 'User';
     return ctx.reply(
-      `Welcome back, ${user.firstName}! 👋\nSelect an option from the menu below:`,
+      `Welcome back, ${fullName}! 👋\nSelect an option from the menu below:`,
       { reply_markup: getMainMenuKeyboard() }
     );
   }
@@ -78,7 +86,7 @@ bot.command('start', async (ctx) => {
   );
 });
 
-// Admin Command: /val 888888 (Create a 6-digit access code)
+// Admin Command: /val 888888
 bot.command('val', async (ctx) => {
   if (ctx.from.id !== adminId && adminId !== 0) {
     return ctx.reply('❌ Unauthorized: Only the bot admin can create access codes.');
@@ -114,7 +122,6 @@ bot.command('login', async (ctx) => {
     return ctx.reply('⚠️ Usage: Send `/login <6-digit-code>`. Example: `/login 888888`', { parse_mode: 'Markdown' });
   }
 
-  // Check if user is already logged in
   let user = await User.findOne({ telegramId: ctx.from.id });
   if (user) {
     return ctx.reply(`✅ You are already logged in with code \`${user.accessCode}\`!`, {
@@ -123,46 +130,32 @@ bot.command('login', async (ctx) => {
     });
   }
 
-  // Verify access code in DB
   const validCode = await AccessCode.findOne({ code: codeInput, isUsed: false });
   if (!validCode) {
     return ctx.reply('❌ Invalid or already used access code. Please check with the admin.');
   }
 
-// Catch bot errors gracefully instead of crashing
-bot.catch((err) => {
-  const ctx = err.ctx;
-  console.error(`Error while handling update ${ctx.update.update_id}:`);
-  console.error(err.error);
-});
-
-// Connect to MongoDB Atlas with connection settings
-const mongoUri = process.env.MONGO_URI;
-mongoose.connect(mongoUri, {
-  serverSelectionTimeoutMS: 5000 // Timeout after 5s instead of buffering indefinitely
-})
-  .then(() => console.log('Successfully connected to MongoDB Atlas!'))
-  .catch(err => console.error('MongoDB connection error:', err));
-  // Mark code as used
   validCode.isUsed = true;
   validCode.usedByTelegramId = ctx.from.id;
   await validCode.save();
 
-  // Create new user in database
   user = await User.create({
     telegramId: ctx.from.id,
     username: ctx.from.username || 'No Username',
-    firstName: ctx.from.first_name || 'User',
-    points: 100, // Starting welcome balance
+    firstName: ctx.from.first_name || '',
+    lastName: ctx.from.last_name || '',
+    points: 100,
     accessCode: codeInput
   });
 
+  const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ') || 'User';
+
   await ctx.reply(
-    `🎉 *Welcome to the Bot, ${user.firstName}!*\n\n` +
+    `🎉 *Welcome to the Bot, ${fullName}!*\n\n` +
     `Your account has been created and saved to the database.\n` +
     `👤 *Username:* @${user.username}\n` +
-    `🆔 *Telegram ID:* \`${user.telegramId}\`\n` +
-    `🔑 *Access Code:* \`${user.accessCode}\`\n` +
+    `🆔 *ID (Access Code):* \`${user.accessCode}\`\n` +
+    `📲 *Telegram ID:* \`${user.telegramId}\`\n` +
     `🪙 *Starting Balance:* ${user.points} points\n\n` +
     `Choose an option below:`,
     {
@@ -172,15 +165,39 @@ mongoose.connect(mongoUri, {
   );
 });
 
-// Handle Menu Button Clicks
+// --- BUTTON HANDLERS ---
+
+// Handle "My Profile" Button
+bot.callbackQuery('btn_profile', async (ctx) => {
+  const user = await User.findOne({ telegramId: ctx.from.id });
+  if (!user) return ctx.answerCallbackQuery({ text: 'Please log in first using /login <code>' });
+
+  await ctx.answerCallbackQuery();
+
+  const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ') || 'User';
+
+  const profileCard = 
+    `👤 *USER PROFILE DETAILS*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📛 *Name:* ${fullName}\n` +
+    `🆔 *ID (Access Code):* \`${user.accessCode}\`\n` +
+    `📲 *Telegram ID:* \`${user.telegramId}\`\n` +
+    `🪙 *Points Balance:* *${user.points} points*\n` +
+    `━━━━━━━━━━━━━━━━━━━━`;
+
+  await ctx.reply(profileCard, { parse_mode: 'Markdown' });
+});
+
+// Handle "My Balance" Button
 bot.callbackQuery('btn_balance', async (ctx) => {
   const user = await User.findOne({ telegramId: ctx.from.id });
   if (!user) return ctx.answerCallbackQuery({ text: 'Please log in first using /login <code>' });
 
   await ctx.answerCallbackQuery();
-  await ctx.reply(`🪙 *Balance Details*\n\nUser ID: \`${user.telegramId}\`\nCurrent Points: *${user.points}*`, { parse_mode: 'Markdown' });
+  await ctx.reply(`🪙 *Balance Details*\n\nTelegram ID: \`${user.telegramId}\`\nCurrent Points: *${user.points}*`, { parse_mode: 'Markdown' });
 });
 
+// Handle "Daily Bonus" Button
 bot.callbackQuery('btn_daily', async (ctx) => {
   const user = await User.findOne({ telegramId: ctx.from.id });
   if (!user) return ctx.answerCallbackQuery({ text: 'Please log in first using /login <code>' });
@@ -203,6 +220,7 @@ bot.callbackQuery('btn_daily', async (ctx) => {
   await ctx.reply(`🎁 You claimed *50 daily points*! New Balance: *${user.points} points*`, { parse_mode: 'Markdown' });
 });
 
+// Handle "Referral Link" Button
 bot.callbackQuery('btn_referral', async (ctx) => {
   const user = await User.findOne({ telegramId: ctx.from.id });
   if (!user) return ctx.answerCallbackQuery({ text: 'Please log in first using /login <code>' });
@@ -226,18 +244,19 @@ app.use(express.json());
 
 app.get('/', (req, res) => res.send('Bot service online!'));
 
-// API Endpoint to Fetch User Data (Database Sync API)
 app.get('/api/user/:telegramId', async (req, res) => {
   try {
     const user = await User.findOne({ telegramId: Number(req.params.telegramId) });
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ') || 'User';
 
     res.json({
       success: true,
       user: {
         telegramId: user.telegramId,
         username: user.username,
-        firstName: user.firstName,
+        name: fullName,
         points: user.points,
         accessCode: user.accessCode,
         referredBy: user.referredBy
