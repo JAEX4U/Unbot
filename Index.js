@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ path: 'un.env' });
 const { Bot, InlineKeyboard } = require('grammy');
 const mongoose = require('mongoose');
 const express = require('express');
