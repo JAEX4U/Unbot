@@ -115,6 +115,11 @@ async function findUserByQuery(query) {
   });
 }
 
+// index.js
+bot.start({
+  drop_pending_updates: true,
+  onStart: (botInfo) => console.log(`Bot @${botInfo.username} started!`)
+});
 // --- REGISTER MODULES ---
 setupAdminCommands(bot, findUserByQuery);
 setupUserCommands(bot, findUserByQuery);
