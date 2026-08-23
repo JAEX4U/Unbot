@@ -122,13 +122,15 @@ bot.use(async (ctx, next) => {
   await next();
 });
 
-// Helper: Main Menu Inline Keyboard
+// Helper: Main Menu Inline Keyboard (Includes Help)
 function getMainMenuKeyboard() {
   return new InlineKeyboard()
     .text('👤 My Profile', 'btn_profile')
     .row()
     .text('🎁 Daily Bonus', 'btn_daily')
-    .text('👥 Referral Link', 'btn_referral');
+    .text('👥 Referral Link', 'btn_referral')
+    .row()
+    .text('❓ Help', 'btn_help');
 }
 
 // Helper: Back Button Keyboard
@@ -536,6 +538,34 @@ bot.callbackQuery('btn_referral', async (ctx) => {
     parse_mode: 'HTML',
     reply_markup: getBackKeyboard()
   });
+});
+
+// Handle "Help" Button with Admin Contact
+bot.callbackQuery('btn_help', async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+
+    const helpText = 
+      `❓ <b>HELP & COMMANDS GUIDE</b>\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `🔑 <code>/login &lt;code&gt;</code> - Sign in with your 6-digit access code\n` +
+      `ℹ️ <code>/info</code> - View your profile details\n` +
+      `ℹ️ <code>/info &lt;id|code|@user&gt;</code> - View public details for a specific user\n\n` +
+      `💡 <b>Features:</b>\n` +
+      `• <b>My Profile:</b> View your account info, points balance, and access code.\n` +
+      `• <b>Daily Bonus:</b> Claim free daily points once every 24 hours.\n` +
+      `• <b>Referral Link:</b> Invite friends to earn extra rewards.\n\n` +
+      `📩 Need assistance? Contact admin support: <a href="https://t.me/dinos_service">@dinos_service</a>`;
+
+    await ctx.editMessageText(helpText, {
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+      reply_markup: getBackKeyboard()
+    });
+  } catch (err) {
+    console.error('Error in btn_help handler:', err);
+    await ctx.answerCallbackQuery({ text: '⚠️ An error occurred.', show_alert: true }).catch(() => {});
+  }
 });
 
 // Start Telegram Bot safely with long polling
