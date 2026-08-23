@@ -206,13 +206,13 @@ bot.command('info', async (ctx) => {
 
   if (!query) {
     const selfUser = await User.findOne({ telegramId: ctx.from.id });
-    if (!selfUser) return ctx.reply('⚠️ Please provide an Access Code, Telegram ID, or Username.\nExample: `/info 888888` or `/info @username`', { parse_mode: 'Markdown' });
+    if (!selfUser) return ctx.reply('⚠️ Please provide an Access Code, Telegram ID, or Username.\nExample: <code>/info 888888</code> or <code>/info @username</code>', { parse_mode: 'HTML' });
     return ctx.reply(formatUserInfo(selfUser), { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
   }
 
   const targetUser = await findUserByQuery(query);
   if (!targetUser) {
-    return ctx.reply('❌ User not found in database.', { parse_mode: 'Markdown' });
+    return ctx.reply('❌ User not found in database.', { parse_mode: 'HTML' });
   }
 
   await ctx.reply(formatUserInfo(targetUser), { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
@@ -398,9 +398,182 @@ bot.command('broadcast', async (ctx) => {
 
   for (const u of users) {
     try {
-      awaitIt looks like your request was cut off or missing context! To help me send the correct fixed `index` file, could you please provide:
+      await bot.api.sendMessage(u.telegramId, `📢 <b>ANNOUNCEMENT</b>\n\n${broadcastMsg}`, { parse_mode: 'HTML' });
+      successCount++;
+    } catch (e) {
+      // User blocked bot
+    }
+  }
 
-1. **The programming language or framework** (e.g., HTML, JavaScript/React, Express, PHP, Python/Django).
-2. **The original code** or a brief summary of the bug/error you're trying to fix.
+  await ctx.reply(`✅ Broadcast sent to <b>${successCount}/${users.length}</b> active users.`, { parse_mode: 'HTML' });
+});
 
-Once you paste the existing code or describe what went wrong, I'll provide the complete, fully corrected file right away.
+// --- USER COMMANDS & BUTTON HANDLERS ---
+
+// User Command: /login 888888
+bot.command('login', async (ctx) => {
+  const codeInput = ctx.match.trim();
+
+  if (!codeInput || codeInput.length !== 6) {
+    return ctx.reply('⚠️ Usage: Send <code>/login &lt;6-digit-code&gt;</code>. Example: <code>/login 888888</code>', { parse_mode: 'HTML' });
+  }
+
+  let user = await User.findOne({ telegramId: ctx.from.id });
+  if (user) {
+    return ctx.reply(`✅ You are already logged in with code <code>${user.accessCode}</code>!`, {
+      parse_mode: 'HTML',
+      reply_markup: getMainMenuKeyboard()
+    });
+  }
+
+  const validCode = await AccessCode.findOne({ code: codeInput, isUsed: false });
+  if (!validCode) {
+    return ctx.reply('❌ Invalid or already used access code. Please check with the admin.');
+  }
+
+  validCode.isUsed = true;
+  validCode.usedByTelegramId = ctx.from.id;
+  await validCode.save();
+
+  user = await User.create({
+    telegramId: ctx.from.id,
+    username: ctx.from.username || 'No Username',
+    firstName: ctx.from.first_name || '',
+    lastName: ctx.from.last_name || '',
+    points: 100,
+    accessCode: codeInput
+  });
+
+  const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ') || 'User';
+
+  await ctx.reply(
+    `🎉 <b>Welcome to the Bot, ${fullName}!</b>\n\n` +
+    `Your account has been created and saved to the database.\n` +
+    `👤 <b>Username:</b> @${user.username}\n` +
+    `🆔 <b>ID (Access Code):</b> <code>${user.accessCode}</code>\n` +
+    `📲 <b>Telegram ID:</b> <code>${user.telegramId}</code>\n` +
+    `🪙 <b>Starting Balance:</b> ${user.points} points\n\n` +
+    `Choose an option below:`,
+    {
+      parse_mode: 'HTML',
+      reply_markup: getMainMenuKeyboard()
+    }
+  );
+});
+
+// Handle "My Profile" Button
+bot.callbackQuery('btn_profile', async (ctx) => {
+  try {
+    const telegramId = Number(ctx.from.id);
+    const user = await User.findOne({ telegramId });
+
+    if (!user) {
+      await ctx.answerCallbackQuery({
+        text: '❌ Account not found. Please log in using /login <code> first.',
+        show_alert: true
+      });
+      return;
+    }
+
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(formatUserInfo(user), {
+      parse_mode: 'HTML',
+      reply_markup: getBackKeyboard()
+    });
+  } catch (err) {
+    console.error('Error in btn_profile handler:', err);
+    await ctx.answerCallbackQuery({ text: '⚠️ An error occurred.', show_alert: true }).catch(() => {});
+  }
+});
+
+// Handle "Back to Main Menu" Button
+bot.callbackQuery('btn_back', async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    const fullName = ctx.from.first_name || 'User';
+    await ctx.editMessageText(
+      `Welcome back, ${fullName}! 👋\nSelect an option from the menu below:`,
+      { reply_markup: getMainMenuKeyboard() }
+    );
+  } catch (err) {
+    console.error('Error in btn_back handler:', err);
+  }
+});
+
+// Handle "Daily Bonus" Button
+bot.callbackQuery('btn_daily', async (ctx) => {
+  const user = await User.findOne({ telegramId: ctx.from.id });
+  if (!user) return ctx.answerCallbackQuery({ text: 'Please log in first using /login <code>' });
+
+  const now = new Date();
+  if (user.lastDailyClaim) {
+    const timeDiff = (now - new Date(user.lastDailyClaim)) / (1000 * 60 * 60);
+    if (timeDiff < 24) {
+      const remaining = Math.ceil(24 - timeDiff);
+      await ctx.answerCallbackQuery({ text: `Wait ${remaining}h for next claim!`, show_alert: true });
+      return;
+    }
+  }
+
+  user.points += 50;
+  user.lastDailyClaim = now;
+  await user.save();
+
+  await ctx.answerCallbackQuery({ text: 'Claimed +50 points!' });
+  await ctx.reply(`🎁 You claimed <b>50 daily points</b>! New Balance: <b>${user.points} points</b>`, { parse_mode: 'HTML' });
+});
+
+// Handle "Referral Link" Button
+bot.callbackQuery('btn_referral', async (ctx) => {
+  const user = await User.findOne({ telegramId: ctx.from.id });
+  if (!user) return ctx.answerCallbackQuery({ text: 'Please log in first using /login <code>' });
+
+  const botInfo = await bot.api.getMe();
+  const refLink = `https://t.me/${botInfo.username}?start=ref_${user.telegramId}`;
+
+  await ctx.answerCallbackQuery();
+  await ctx.reply(`👥 <b>Your Referral Link:</b>\n<code>${refLink}</code>\n\nShare this link to earn bonus points when friends join!`, {
+    parse_mode: 'HTML',
+    reply_markup: getBackKeyboard()
+  });
+});
+
+// Start Telegram Bot safely with long polling
+bot.start({
+  drop_pending_updates: true,
+  onStart: (botInfo) => console.log(`Telegram Bot @${botInfo.username} engine is running...`)
+});
+
+// 4. Express REST API Server
+const app = express();
+app.use(express.json());
+
+app.get('/', (req, res) => res.send('Bot service online!'));
+
+app.get('/api/user/:telegramId', async (req, res) => {
+  try {
+    const user = await User.findOne({ telegramId: Number(req.params.telegramId) });
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ') || 'User';
+
+    res.json({
+      success: true,
+      user: {
+        telegramId: user.telegramId,
+        username: user.username,
+        name: fullName,
+        points: user.points,
+        accessCode: user.accessCode,
+        referredBy: user.referredBy,
+        isBanned: user.isBanned,
+        isSuspended: user.isSuspended
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`REST API running on port ${PORT}`));
