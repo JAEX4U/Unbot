@@ -1,6 +1,25 @@
 // user.js
 const { InlineKeyboard } = require('grammy');
-const axios = require('axios');
+// Native fetch helper replacing axios
+async function fetchAdsgramAd(telegramId, type = 'banner') {
+  try {
+    const url = `https://api.adsgram.ai/adv?blockId=${ADSGRAM_BLOCK_ID}&tgid=${telegramId}&type=${type}`;
+    const response = await fetch(url, { signal: AbortSignal.timeout(3000) });
+    const data = await response.json();
+
+    if (data && data.banner) {
+      return {
+        id: data.banner.id || 'adsgram_ad',
+        title: data.banner.title || data.banner.text || 'Sponsored Offer',
+        reward: data.banner.rewardPoints || 50,
+        link: data.banner.link
+      };
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
 const { User, AccessCode } = require('./models');
 
 // Adsgram Block ID from Environment (or Fallback Key)
