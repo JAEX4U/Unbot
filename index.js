@@ -12,11 +12,9 @@ if (!mongoUri) {
 
 mongoose.connect(mongoUri, { serverSelectionTimeoutMS: 5000 })
   .then(() => console.log('Successfully connected to MongoDB Atlas!'))
-  .catch(err => {
-    console.error('MongoDB connection error:', err);
-  });
+  .catch(err => console.error('MongoDB connection error:', err));
 
-// 2. Define Schema with Admin Codes & User Details
+// 2. Define Schemas
 const userSchema = new mongoose.Schema({
   telegramId: { type: Number, required: true, unique: true },
   username: { type: String, default: '' },
@@ -25,7 +23,9 @@ const userSchema = new mongoose.Schema({
   points: { type: Number, default: 0 },
   accessCode: { type: String, required: true },
   referredBy: { type: Number, default: null },
-  lastDailyClaim: { type: Date, default: null }
+  lastDailyClaim: { type: Date, default: null },
+  isBanned: { type: Boolean, default: false },
+  isSuspended: { type: Boolean, default: false }
 }, { timestamps: true });
 
 const codeSchema = new mongoose.Schema({
@@ -49,13 +49,32 @@ if (!botToken) {
 
 const bot = new Bot(botToken);
 
-// Catch bot errors gracefully instead of crashing
 bot.catch((err) => {
   console.error(`Error while handling update ${err.ctx.update.update_id}:`);
   console.error(err.error);
 });
 
-// Helper: Main Menu Inline Keyboard Buttons
+// Global Middleware: Check if user is Banned or Suspended
+bot.use(async (ctx, next) => {
+  if (!ctx.from) return await next();
+
+  const user = await User.findOne({ telegramId: ctx.from.id });
+  if (user) {
+    if (user.isBanned) {
+      if (ctx.callbackQuery) await ctx.answerCallbackQuery({ text: '🚫 Account Banned.', show_alert: true });
+      else await ctx.reply('⛔ *Your account has been permanently banned from using this bot.*', { parse_mode: 'Markdown' });
+      return;
+    }
+    if (user.isSuspended) {
+      if (ctx.callbackQuery) await ctx.answerCallbackQuery({ text: '⚠️ Account Suspended.', show_alert: true });
+      else await ctx.reply('⚠️ *Your account is currently suspended. Please contact support.*', { parse_mode: 'Markdown' });
+      return;
+    }
+  }
+  await next();
+});
+
+// Helper: Main Menu Inline Keyboard
 function getMainMenuKeyboard() {
   return new InlineKeyboard()
     .text('👤 My Profile', 'btn_profile')
@@ -63,6 +82,48 @@ function getMainMenuKeyboard() {
     .row()
     .text('🎁 Daily Bonus', 'btn_daily')
     .text('👥 Referral Link', 'btn_referral');
+}
+
+// Helper: Find User by ID, Username, or Access Code
+async function findUserByQuery(query) {
+  const cleanQuery = query.trim().replace(/^@/, '');
+  
+  if (!isNaN(cleanQuery)) {
+    const num = Number(cleanQuery);
+    let u = await User.findOne({ telegramId: num });
+    if (u) return u;
+    u = await User.findOne({ accessCode: cleanQuery });
+    if (u) return u;
+  }
+  
+  return await User.findOne({
+    $or: [
+      { username: new RegExp(`^${cleanQuery}$`, 'i') },
+      { accessCode: cleanQuery }
+    ]
+  });
+}
+
+// Helper: Format User Profile/Info Output
+function formatUserInfo(user) {
+  const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ') || 'User';
+  const usernameDisplay = user.username && user.username !== 'No Username' ? `@${user.username}` : 'Not set';
+  const registeredDate = user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A';
+  
+  let statusText = '🟢 Active';
+  if (user.isBanned) statusText = '🔴 Banned';
+  else if (user.isSuspended) statusText = '🟡 Suspended';
+
+  return `🔍 *USER INFORMATION*\n` +
+         `━━━━━━━━━━━━━━━━━━━━\n` +
+         `📛 *Name:* ${fullName}\n` +
+         `🆔 *ID (Access Code):* \`${user.accessCode}\`\n` +
+         `📲 *Telegram ID:* \`${user.telegramId}\`\n` +
+         `🏷️ *Username:* ${usernameDisplay}\n` +
+         `🪙 *Points Balance:* *${user.points} points*\n` +
+         `📊 *Status:* ${statusText}\n` +
+         `📅 *Registered:* ${registeredDate}\n` +
+         `━━━━━━━━━━━━━━━━━━━━`;
 }
 
 // Command: /start
@@ -86,11 +147,116 @@ bot.command('start', async (ctx) => {
   );
 });
 
+// Public Command: /info <accessCode | telegramId | @username>
+bot.command('info', async (ctx) => {
+  const query = ctx.match.trim();
+
+  if (!query) {
+    // If no argument provided, show caller's own info
+    const selfUser = await User.findOne({ telegramId: ctx.from.id });
+    if (!selfUser) return ctx.reply('⚠️ Please provide an Access Code, Telegram ID, or Username.\nExample: `/info 888888` or `/info @username`', { parse_mode: 'Markdown' });
+    return ctx.reply(formatUserInfo(selfUser), { parse_mode: 'Markdown' });
+  }
+
+  const targetUser = await findUserByQuery(query);
+  if (!targetUser) {
+    return ctx.reply('❌ User not found in database.', { parse_mode: 'Markdown' });
+  }
+
+  await ctx.reply(formatUserInfo(targetUser), { parse_mode: 'Markdown' });
+});
+
+// --- ADMIN COMMANDS ---
+
+function isAdmin(ctx) {
+  if (ctx.from.id !== adminId && adminId !== 0) {
+    ctx.reply('❌ Unauthorized: Admin access only.');
+    return false;
+  }
+  return true;
+}
+
+// Admin Panel Dashboard: /admin
+bot.command('admin', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+
+  const totalUsers = await User.countDocuments();
+  const totalCodes = await AccessCode.countDocuments();
+  const unusedCodes = await AccessCode.countDocuments({ isUsed: false });
+  const bannedUsers = await User.countDocuments({ isBanned: true });
+  const suspendedUsers = await User.countDocuments({ isSuspended: true });
+
+  const adminText = 
+    `🛠️ *ADMIN PANEL DASHBOARD*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `👥 *Total Users:* ${totalUsers}\n` +
+    `🔴 *Banned:* ${bannedUsers} | 🟡 *Suspended:* ${suspendedUsers}\n` +
+    `🔑 *Total Codes:* ${totalCodes} (🟢 *Unused:* ${unusedCodes})\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `*Admin Commands:*\n` +
+    `• \`/val <6-digit-code>\` - Create access code\n` +
+    `• \`/codes\` - View generated codes\n` +
+    `• \`/ban <id|code|@user>\` - Ban a user\n` +
+    `• \`/unban <id|code|@user>\` - Unban/Unsuspend user\n` +
+    `• \`/suspend <id|code|@user>\` - Suspend a user\n` +
+    `• \`/addpoints <id> <amount>\` - Add points\n` +
+    `• \`/removepoints <id> <amount>\` - Deduct points\n` +
+    `• \`/broadcast <message>\` - Send message to all`;
+
+  await ctx.reply(adminText, { parse_mode: 'Markdown' });
+});
+
+// Admin Command: /ban <id | code | @username>
+bot.command('ban', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const query = ctx.match.trim();
+  if (!query) return ctx.reply('⚠️ Usage: `/ban <telegram_id | access_code | @username>`', { parse_mode: 'Markdown' });
+
+  const user = await findUserByQuery(query);
+  if (!user) return ctx.reply('❌ User not found.');
+
+  user.isBanned = true;
+  user.isSuspended = false;
+  await user.save();
+
+  await ctx.reply(`🔴 User *${user.firstName}* (\`${user.telegramId}\`) is now **BANNED**.`, { parse_mode: 'Markdown' });
+});
+
+// Admin Command: /unban <id | code | @username>
+bot.command('unban', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const query = ctx.match.trim();
+  if (!query) return ctx.reply('⚠️ Usage: `/unban <telegram_id | access_code | @username>`', { parse_mode: 'Markdown' });
+
+  const user = await findUserByQuery(query);
+  if (!user) return ctx.reply('❌ User not found.');
+
+  user.isBanned = false;
+  user.isSuspended = false;
+  await user.save();
+
+  await ctx.reply(`🟢 User *${user.firstName}* (\`${user.telegramId}\`) has been **UNBANNED / RESTORED**.`, { parse_mode: 'Markdown' });
+});
+
+// Admin Command: /suspend <id | code | @username>
+bot.command('suspend', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const query = ctx.match.trim();
+  if (!query) return ctx.reply('⚠️ Usage: `/suspend <telegram_id | access_code | @username>`', { parse_mode: 'Markdown' });
+
+  const user = await findUserByQuery(query);
+  if (!user) return ctx.reply('❌ User not found.');
+
+  user.isSuspended = true;
+  user.isBanned = false;
+  await user.save();
+
+  await ctx.reply(`🟡 User *${user.firstName}* (\`${user.telegramId}\`) is now **SUSPENDED**.`, { parse_mode: 'Markdown' });
+});
+
 // Admin Command: /val 888888
 bot.command('val', async (ctx) => {
-  if (ctx.from.id !== adminId && adminId !== 0) {
-    return ctx.reply('❌ Unauthorized: Only the bot admin can create access codes.');
-  }
+  if (!isAdmin(ctx)) return;
 
   const codeArg = ctx.match.trim();
   if (!codeArg || codeArg.length !== 6 || isNaN(codeArg)) {
@@ -103,16 +269,94 @@ bot.command('val', async (ctx) => {
       return ctx.reply('⚠️ This code already exists in the database.');
     }
 
-    await AccessCode.create({
-      code: codeArg,
-      createdBy: ctx.from.id
-    });
-
+    await AccessCode.create({ code: codeArg, createdBy: ctx.from.id });
     await ctx.reply(`✅ *Access Code Created:* \`${codeArg}\`\nUsers can now register using \`/login ${codeArg}\``, { parse_mode: 'Markdown' });
   } catch (err) {
     await ctx.reply('❌ Error generating access code.');
   }
 });
+
+// Admin Command: /codes
+bot.command('codes', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+
+  const codes = await AccessCode.find().sort({ createdAt: -1 }).limit(20);
+  if (codes.length === 0) return ctx.reply('No access codes found.');
+
+  let message = `🔑 *Access Codes List (Latest 20):*\n━━━━━━━━━━━━━━━━━━━━\n`;
+  codes.forEach(c => {
+    const status = c.isUsed ? `🔴 Used (by \`${c.usedByTelegramId}\`)` : `🟢 Unused`;
+    message += `• Code: \`${c.code}\` | ${status}\n`;
+  });
+
+  await ctx.reply(message, { parse_mode: 'Markdown' });
+});
+
+// Admin Command: /addpoints <id|code|username> <amount>
+bot.command('addpoints', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+
+  const args = ctx.match.trim().split(' ');
+  const targetQuery = args[0];
+  const amount = Number(args[1]);
+
+  if (!targetQuery || isNaN(amount)) {
+    return ctx.reply('⚠️ Usage: `/addpoints <user_id|code|@username> <amount>`\nExample: `/addpoints 123456789 500`', { parse_mode: 'Markdown' });
+  }
+
+  const user = await findUserByQuery(targetQuery);
+  if (!user) return ctx.reply('❌ User not found.');
+
+  user.points += amount;
+  await user.save();
+
+  await ctx.reply(`✅ Added *${amount} points* to *${user.firstName}* (\`${user.telegramId}\`).\nNew Balance: *${user.points} points*`, { parse_mode: 'Markdown' });
+});
+
+// Admin Command: /removepoints <id|code|username> <amount>
+bot.command('removepoints', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+
+  const args = ctx.match.trim().split(' ');
+  const targetQuery = args[0];
+  const amount = Number(args[1]);
+
+  if (!targetQuery || isNaN(amount)) {
+    return ctx.reply('⚠️ Usage: `/removepoints <user_id|code|@username> <amount>`\nExample: `/removepoints 123456789 200`', { parse_mode: 'Markdown' });
+  }
+
+  const user = await findUserByQuery(targetQuery);
+  if (!user) return ctx.reply('❌ User not found.');
+
+  user.points = Math.max(0, user.points - amount);
+  await user.save();
+
+  await ctx.reply(`✅ Deducted *${amount} points* from *${user.firstName}* (\`${user.telegramId}\`).\nNew Balance: *${user.points} points*`, { parse_mode: 'Markdown' });
+});
+
+// Admin Command: /broadcast <message>
+bot.command('broadcast', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+
+  const broadcastMsg = ctx.match.trim();
+  if (!broadcastMsg) return ctx.reply('⚠️ Usage: `/broadcast <your message here>`', { parse_mode: 'Markdown' });
+
+  const users = await User.find({ isBanned: false }, 'telegramId');
+  let successCount = 0;
+
+  for (const u of users) {
+    try {
+      await bot.api.sendMessage(u.telegramId, `📢 *ANNOUNCEMENT*\n\n${broadcastMsg}`, { parse_mode: 'Markdown' });
+      successCount++;
+    } catch (e) {
+      // User blocked bot or invalid ID
+    }
+  }
+
+  await ctx.reply(`✅ Broadcast sent to *${successCount}/${users.length}* active users.`, { parse_mode: 'Markdown' });
+});
+
+// --- USER COMMANDS & BUTTON HANDLERS ---
 
 // User Command: /login 888888
 bot.command('login', async (ctx) => {
@@ -165,27 +409,13 @@ bot.command('login', async (ctx) => {
   );
 });
 
-// --- BUTTON HANDLERS ---
-
 // Handle "My Profile" Button
 bot.callbackQuery('btn_profile', async (ctx) => {
   const user = await User.findOne({ telegramId: ctx.from.id });
   if (!user) return ctx.answerCallbackQuery({ text: 'Please log in first using /login <code>' });
 
   await ctx.answerCallbackQuery();
-
-  const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ') || 'User';
-
-  const profileCard = 
-    `👤 *USER PROFILE DETAILS*\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `📛 *Name:* ${fullName}\n` +
-    `🆔 *ID (Access Code):* \`${user.accessCode}\`\n` +
-    `📲 *Telegram ID:* \`${user.telegramId}\`\n` +
-    `🪙 *Points Balance:* *${user.points} points*\n` +
-    `━━━━━━━━━━━━━━━━━━━━`;
-
-  await ctx.reply(profileCard, { parse_mode: 'Markdown' });
+  await ctx.reply(formatUserInfo(user), { parse_mode: 'Markdown' });
 });
 
 // Handle "My Balance" Button
@@ -259,7 +489,9 @@ app.get('/api/user/:telegramId', async (req, res) => {
         name: fullName,
         points: user.points,
         accessCode: user.accessCode,
-        referredBy: user.referredBy
+        referredBy: user.referredBy,
+        isBanned: user.isBanned,
+        isSuspended: user.isSuspended
       }
     });
   } catch (err) {
