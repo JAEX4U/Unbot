@@ -1,40 +1,13 @@
 // user.js
 const { InlineKeyboard } = require('grammy');
-const axios = require('axios');
 const { User, AccessCode } = require('./models');
 
-// Adsgram Block ID from Environment (or Fallback Key)
-const ADSGRAM_BLOCK_ID = process.env.ADSGRAM_BLOCK_ID || '68a57a654a6d416e814783af7a685817';
+// 📢 Channel & Group Configuration for Community Tasks
+const SPONSOR_CHANNEL = '@Unlab02_Channel'; // Replace with your actual channel
+const SPONSOR_GROUP = '@Unlab02_Group';     // Replace with your actual group
+const TASK_REWARD_POINTS = 100;
 
-// Cooldown tracker for watching ads (Prevents spam)
-const userAdCooldowns = new Map();
-const AD_COOLDOWN_MS = 60 * 1000; // 1-minute cooldown between watch-ad tasks
-
-// 🌐 Adsgram API Helper: Fetch dynamic ads from Adsgram
-async function fetchAdsgramAd(telegramId) {
-  try {
-    const response = await axios.get('https://api.adsgram.ai/adv', {
-      params: { 
-        blockId: ADSGRAM_BLOCK_ID, 
-        tgid: telegramId
-      },
-      timeout: 3000
-    });
-
-    if (response.data && response.data.banner) {
-      return {
-        id: response.data.banner.id || 'adsgram_ad',
-        title: response.data.banner.title || response.data.banner.text || 'Sponsored Offer',
-        link: response.data.banner.link
-      };
-    }
-    return null;
-  } catch (error) {
-    return null; // Silently handle timeout or no fill
-  }
-}
-
-// 🔘 Helper: Main Menu Inline Keyboard
+// 🔘 Navigation Keyboards
 function getMainMenuKeyboard() {
   return new InlineKeyboard()
     .text('👤 My Profile', 'btn_profile')
@@ -46,17 +19,15 @@ function getMainMenuKeyboard() {
     .text('❓ Help', 'btn_help');
 }
 
-// 🔘 Helper: Back Button Keyboard
 function getBackKeyboard() {
   return new InlineKeyboard().text('🔙 Back to Main Menu', 'btn_back');
 }
 
-// 🔘 Helper: Back to Earn Menu Keyboard
 function getEarnBackKeyboard() {
   return new InlineKeyboard().text('🔙 Back to Earn Menu', 'menu_earn');
 }
 
-// 👤 Helper: Format User Profile Details
+// 👤 Helper: Profile Formatter
 function formatUserInfo(user) {
   const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ') || 'User';
   const usernameDisplay = user.username && user.username !== 'No Username' ? `@${user.username}` : 'Not set';
@@ -86,10 +57,7 @@ function setupUserCommands(bot, findUserByQuery) {
 
     if (user) {
       const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ') || 'User';
-      return ctx.reply(
-        `Welcome back, ${fullName}! 👋\nSelect an option from the menu below:`,
-        { reply_markup: getMainMenuKeyboard() }
-      );
+      return ctx.reply(`Welcome back, ${fullName}! 👋\nSelect an option from the menu below:`, { reply_markup: getMainMenuKeyboard() });
     }
 
     await ctx.reply(
@@ -101,38 +69,31 @@ function setupUserCommands(bot, findUserByQuery) {
     );
   });
 
-  // Public Command: /info
+  // Command: /info
   bot.command('info', async (ctx) => {
-    const query = ctx.match.trim();
-
+    const query = ctx.match ? ctx.match.trim() : '';
     if (!query) {
       const selfUser = await User.findOne({ telegramId: ctx.from.id });
-      if (!selfUser) return ctx.reply('⚠️ Please provide an Access Code, Telegram ID, or Username.\nExample: <code>/info 888888</code> or <code>/info @username</code>', { parse_mode: 'HTML' });
+      if (!selfUser) return ctx.reply('⚠️ Please provide an Access Code, Telegram ID, or Username.\nExample: <code>/info 888888</code>', { parse_mode: 'HTML' });
       return ctx.reply(formatUserInfo(selfUser), { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
     }
 
     const targetUser = await findUserByQuery(query);
-    if (!targetUser) {
-      return ctx.reply('❌ User not found in database.', { parse_mode: 'HTML' });
-    }
+    if (!targetUser) return ctx.reply('❌ User not found in database.', { parse_mode: 'HTML' });
 
     await ctx.reply(formatUserInfo(targetUser), { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
   });
 
-  // User Command: /login
+  // Command: /login
   bot.command('login', async (ctx) => {
-    const codeInput = ctx.match.trim();
-
+    const codeInput = ctx.match ? ctx.match.trim() : '';
     if (!codeInput || codeInput.length !== 6) {
       return ctx.reply('⚠️ Usage: Send <code>/login &lt;6-digit-code&gt;</code>. Example: <code>/login 888888</code>', { parse_mode: 'HTML' });
     }
 
     let user = await User.findOne({ telegramId: ctx.from.id });
     if (user) {
-      return ctx.reply(`✅ You are already logged in with code <code>${user.accessCode}</code>!`, {
-        parse_mode: 'HTML',
-        reply_markup: getMainMenuKeyboard()
-      });
+      return ctx.reply(`✅ You are already logged in with code <code>${user.accessCode}</code>!`, { parse_mode: 'HTML', reply_markup: getMainMenuKeyboard() });
     }
 
     const validCode = await AccessCode.findOne({ code: codeInput, isUsed: false });
@@ -150,34 +111,29 @@ function setupUserCommands(bot, findUserByQuery) {
       firstName: ctx.from.first_name || '',
       lastName: ctx.from.last_name || '',
       points: 100,
-      accessCode: codeInput
+      accessCode: codeInput,
+      completedTasks: []
     });
 
     const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ') || 'User';
 
     await ctx.reply(
       `🎉 <b>Welcome to the Bot, ${fullName}!</b>\n\n` +
-      `Your account has been created and saved to the database.\n` +
-      `👤 <b>Username:</b> @${user.username}\n` +
-      `🆔 <b>ID (Access Code):</b> <code>${user.accessCode}</code>\n` +
-      `📲 <b>Telegram ID:</b> <code>${user.telegramId}</code>\n` +
+      `Your account has been created.\n` +
       `🪙 <b>Starting Balance:</b> ${user.points} points\n\n` +
       `Choose an option below:`,
-      {
-        parse_mode: 'HTML',
-        reply_markup: getMainMenuKeyboard()
-      }
+      { parse_mode: 'HTML', reply_markup: getMainMenuKeyboard() }
     );
   });
 
-  // Command & Callback: /earn or Earn Menu Button
+  // 💰 Earn Rewards Hub
   const handleEarnMenu = async (ctx) => {
     const message = 
       `💰 <b>EARN REWARDS CENTER</b>\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `Choose a section below to earn extra points:\n\n` +
-      `🎯 <b>Tasks:</b> Watch Adsgram ads, complete direct tasks & daily claims.\n` +
-      `👥 <b>Referral:</b> Invite friends to earn bonus points.`;
+      `Complete community tasks or invite friends to earn instant point rewards:\n\n` +
+      `🎯 <b>Tasks:</b> Join Official Channel & Group.\n` +
+      `👥 <b>Referral:</b> Invite friends for bonus points.`;
 
     const keyboard = new InlineKeyboard()
       .text('🎯 Tasks', 'earn_tasks')
@@ -197,105 +153,167 @@ function setupUserCommands(bot, findUserByQuery) {
   bot.command('earn', handleEarnMenu);
   bot.callbackQuery('menu_earn', handleEarnMenu);
 
-  // 🎯 CALLBACK: Tasks Sub-Menu (Combines Adsgram, Direct Ads, Referrals, & Daily Claims)
+  // 🎯 CALLBACK: Tasks Sub-Menu
   bot.callbackQuery('earn_tasks', async (ctx) => {
     await ctx.answerCallbackQuery();
 
+    const user = await User.findOne({ telegramId: ctx.from.id });
+    const completed = user?.completedTasks || [];
+
+    const channelDone = completed.includes(`join_${SPONSOR_CHANNEL.toLowerCase()}`) ? '✅' : '🔴';
+    const groupDone = completed.includes(`join_${SPONSOR_GROUP.toLowerCase()}`) ? '✅' : '🔴';
+
     const message = 
-      `🎯 <b>AVAILABLE TASKS</b>\n` +
+      `🎯 <b>AVAILABLE COMMUNITY TASKS</b>\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `Complete actions below to earn instant points:\n\n` +
-      `1. 📺 <b>Watch Adsgram Ad:</b> Earn +25 Points per view.\n` +
-      `2. 🎁 <b>Daily Bonus:</b> Claim +50 Points daily.\n` +
-      `3. 📢 <b>Join Telegram Channel:</b> Earn +100 Points.\n` +
-      `4. 🚀 <b>Register Partner Exchange:</b> Earn +500 Points.\n`;
+      `Join our official channel and group to earn free points:\n\n` +
+      `${channelDone} 1. 📢 <b>Join Official Channel</b> (+${TASK_REWARD_POINTS} pts)\n` +
+      `${groupDone} 2. 💬 <b>Join Official Group</b> (+${TASK_REWARD_POINTS} pts)\n`;
 
     const keyboard = new InlineKeyboard()
-      .text('📺 Watch Adsgram Ad (+25 pts)', 'task_watch_ad').row()
-      .text('🎁 Daily Check-in (+50 pts)', 'btn_daily').row()
-      .url('📢 Join Official Channel (+100 pts)', 'https://t.me/YourChannelLink').row()
-      .url('💎 Register Partner Exchange (+500 pts)', 'https://bybit.com/register?ref=YOUR_REF').row()
+      .text(`${channelDone} Join Channel Task`, 'task_channel_details').row()
+      .text(`${groupDone} Join Group Task`, 'task_group_details').row()
       .text('🔙 Back to Earn Menu', 'menu_earn');
 
     await ctx.editMessageText(message, { parse_mode: 'HTML', reply_markup: keyboard });
   });
 
-  // 📺 ACTION: Watch Adsgram Sponsored Ad
-  bot.callbackQuery('task_watch_ad', async (ctx) => {
-    const telegramId = ctx.from.id;
-    const now = Date.now();
+  // 📢 TASK 1: Join Channel Details & Verification
+  bot.callbackQuery('task_channel_details', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await User.findOne({ telegramId: ctx.from.id });
+    const taskId = `join_${SPONSOR_CHANNEL.toLowerCase()}`;
+    const isCompleted = user?.completedTasks?.includes(taskId);
 
-    // Check Cooldown
-    const lastWatch = userAdCooldowns.get(telegramId) || 0;
-    if (now - lastWatch < AD_COOLDOWN_MS) {
-      const remainingSecs = Math.ceil((AD_COOLDOWN_MS - (now - lastWatch)) / 1000);
-      return ctx.answerCallbackQuery({ 
-        text: `⏳ Please wait ${remainingSecs} seconds before watching another ad!`, 
-        show_alert: true 
-      });
-    }
+    const statusText = isCompleted ? '✅ <b>Status:</b> Completed' : '❌ <b>Status:</b> Not Completed';
 
-    await ctx.answerCallbackQuery('Fetching Adsgram ad...');
-
-    const user = await User.findOne({ telegramId });
-    if (!user) return ctx.reply('❌ User record not found.');
-
-    const ad = await fetchAdsgramAd(telegramId);
-
-    // Update cooldown & grant points
-    userAdCooldowns.set(telegramId, now);
-    const rewardPoints = 25;
-    user.points += rewardPoints;
-    await user.save();
-
-    let responseText = `✅ <b>Ad Task Completed!</b>\n` +
-      `You earned <b>+${rewardPoints} Points</b>!\n` +
-      `New Balance: <b>${user.points} Points</b>`;
+    const message = 
+      `📢 <b>TASK: Join Official Channel</b>\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `Join ${SPONSOR_CHANNEL} to claim <b>+${TASK_REWARD_POINTS} Points</b>.\n\n` +
+      `${statusText}\n\n` +
+      `<i>Click "Verify Channel" after joining.</i>`;
 
     const keyboard = new InlineKeyboard();
-
-    if (ad) {
-      responseText += `\n\n━━━━━━━━━━━━━━━━━━━━\n📢 <b>Adsgram Sponsor:</b>\n${ad.title}`;
-      if (ad.link) {
-        keyboard.url('👉 View Sponsor Offer', ad.link).row();
-      }
-    } else {
-      responseText += `\n\n━━━━━━━━━━━━━━━━━━━━\n⚡ <i>No active Adsgram ad to display right now, but your reward points were added!</i>`;
+    if (!isCompleted) {
+      keyboard.url('📢 Join Channel', `https://t.me/${SPONSOR_CHANNEL.replace('@', '')}`).row();
+      keyboard.text('🔄 Verify Channel', 'verify_channel').row();
     }
+    keyboard.text('🔙 Back to Tasks', 'earn_tasks');
 
-    keyboard.text('🔙 Back to Earn Menu', 'menu_earn');
-
-    await ctx.reply(responseText, { parse_mode: 'HTML', reply_markup: keyboard });
+    await ctx.editMessageText(message, { parse_mode: 'HTML', reply_markup: keyboard });
   });
 
-  // Handle "My Profile" Button
+  bot.callbackQuery('verify_channel', async (ctx) => {
+    const telegramId = ctx.from.id;
+    const taskId = `join_${SPONSOR_CHANNEL.toLowerCase()}`;
+
+    const user = await User.findOne({ telegramId });
+    if (!user) return ctx.answerCallbackQuery({ text: '❌ User not found.', show_alert: true });
+
+    if (user.completedTasks && user.completedTasks.includes(taskId)) {
+      return ctx.answerCallbackQuery({ text: '⚠️ You have already completed this task!', show_alert: true });
+    }
+
+    try {
+      const member = await bot.api.getChatMember(SPONSOR_CHANNEL, telegramId);
+      if (['creator', 'administrator', 'member'].includes(member.status)) {
+        user.points += TASK_REWARD_POINTS;
+        user.completedTasks.push(taskId);
+        await user.save();
+
+        await ctx.answerCallbackQuery({ text: `🎉 Verified! +${TASK_REWARD_POINTS} Points added.`, show_alert: true });
+        
+        await ctx.editMessageText(
+          `🎉 <b>TASK COMPLETED!</b>\n━━━━━━━━━━━━━━━━━━━━\n` +
+          `You earned <b>+${TASK_REWARD_POINTS} Points</b> for joining ${SPONSOR_CHANNEL}.\n\n` +
+          `🪙 <b>New Balance:</b> ${user.points} Points`,
+          { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('🔙 Back to Tasks', 'earn_tasks') }
+        );
+      } else {
+        await ctx.answerCallbackQuery({ text: `❌ You haven't joined ${SPONSOR_CHANNEL} yet!`, show_alert: true });
+      }
+    } catch (e) {
+      await ctx.answerCallbackQuery({ text: '⚠️ Unable to verify. Make sure the bot is an Admin in the channel.', show_alert: true });
+    }
+  });
+
+  // 💬 TASK 2: Join Group Details & Verification
+  bot.callbackQuery('task_group_details', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const user = await User.findOne({ telegramId: ctx.from.id });
+    const taskId = `join_${SPONSOR_GROUP.toLowerCase()}`;
+    const isCompleted = user?.completedTasks?.includes(taskId);
+
+    const statusText = isCompleted ? '✅ <b>Status:</b> Completed' : '❌ <b>Status:</b> Not Completed';
+
+    const message = 
+      `💬 <b>TASK: Join Official Group</b>\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `Join ${SPONSOR_GROUP} to claim <b>+${TASK_REWARD_POINTS} Points</b>.\n\n` +
+      `${statusText}\n\n` +
+      `<i>Click "Verify Group" after joining.</i>`;
+
+    const keyboard = new InlineKeyboard();
+    if (!isCompleted) {
+      keyboard.url('💬 Join Group', `https://t.me/${SPONSOR_GROUP.replace('@', '')}`).row();
+      keyboard.text('🔄 Verify Group', 'verify_group').row();
+    }
+    keyboard.text('🔙 Back to Tasks', 'earn_tasks');
+
+    await ctx.editMessageText(message, { parse_mode: 'HTML', reply_markup: keyboard });
+  });
+
+  bot.callbackQuery('verify_group', async (ctx) => {
+    const telegramId = ctx.from.id;
+    const taskId = `join_${SPONSOR_GROUP.toLowerCase()}`;
+
+    const user = await User.findOne({ telegramId });
+    if (!user) return ctx.answerCallbackQuery({ text: '❌ User not found.', show_alert: true });
+
+    if (user.completedTasks && user.completedTasks.includes(taskId)) {
+      return ctx.answerCallbackQuery({ text: '⚠️ You have already completed this task!', show_alert: true });
+    }
+
+    try {
+      const member = await bot.api.getChatMember(SPONSOR_GROUP, telegramId);
+      if (['creator', 'administrator', 'member'].includes(member.status)) {
+        user.points += TASK_REWARD_POINTS;
+        user.completedTasks.push(taskId);
+        await user.save();
+
+        await ctx.answerCallbackQuery({ text: `🎉 Verified! +${TASK_REWARD_POINTS} Points added.`, show_alert: true });
+
+        await ctx.editMessageText(
+          `🎉 <b>TASK COMPLETED!</b>\n━━━━━━━━━━━━━━━━━━━━\n` +
+          `You earned <b>+${TASK_REWARD_POINTS} Points</b> for joining ${SPONSOR_GROUP}.\n\n` +
+          `🪙 <b>New Balance:</b> ${user.points} Points`,
+          { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('🔙 Back to Tasks', 'earn_tasks') }
+        );
+      } else {
+        await ctx.answerCallbackQuery({ text: `❌ You haven't joined ${SPONSOR_GROUP} yet!`, show_alert: true });
+      }
+    } catch (e) {
+      await ctx.answerCallbackQuery({ text: '⚠️ Unable to verify. Make sure the bot is an Admin in the group.', show_alert: true });
+    }
+  });
+
+  // Handle "My Profile"
   bot.callbackQuery('btn_profile', async (ctx) => {
-    try {
-      const user = await User.findOne({ telegramId: Number(ctx.from.id) });
-      if (!user) {
-        await ctx.answerCallbackQuery({ text: '❌ Account not found. Please log in using /login <code> first.', show_alert: true });
-        return;
-      }
-      await ctx.answerCallbackQuery();
-      await ctx.editMessageText(formatUserInfo(user), { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
-    } catch (err) {
-      console.error('Error in btn_profile handler:', err);
-      await ctx.answerCallbackQuery({ text: '⚠️ An error occurred.', show_alert: true }).catch(() => {});
-    }
+    const user = await User.findOne({ telegramId: Number(ctx.from.id) });
+    if (!user) return ctx.answerCallbackQuery({ text: '❌ Account not found. Use /login <code_id>', show_alert: true });
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(formatUserInfo(user), { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
   });
 
-  // Handle "Back to Main Menu" Button
+  // Handle "Back to Main Menu"
   bot.callbackQuery('btn_back', async (ctx) => {
-    try {
-      await ctx.answerCallbackQuery();
-      const fullName = ctx.from.first_name || 'User';
-      await ctx.editMessageText(`Welcome back, ${fullName}! 👋\nSelect an option from the menu below:`, { reply_markup: getMainMenuKeyboard() });
-    } catch (err) {
-      console.error('Error in btn_back handler:', err);
-    }
+    await ctx.answerCallbackQuery();
+    const fullName = ctx.from.first_name || 'User';
+    await ctx.editMessageText(`Welcome back, ${fullName}! 👋\nSelect an option from the menu below:`, { reply_markup: getMainMenuKeyboard() });
   });
 
-  // Handle "Daily Bonus" Button
+  // Handle "Daily Bonus"
   bot.callbackQuery('btn_daily', async (ctx) => {
     const user = await User.findOne({ telegramId: ctx.from.id });
     if (!user) return ctx.answerCallbackQuery({ text: 'Please log in first using /login <code>' });
@@ -305,8 +323,7 @@ function setupUserCommands(bot, findUserByQuery) {
       const timeDiff = (now - new Date(user.lastDailyClaim)) / (1000 * 60 * 60);
       if (timeDiff < 24) {
         const remaining = Math.ceil(24 - timeDiff);
-        await ctx.answerCallbackQuery({ text: `Wait ${remaining}h for next claim!`, show_alert: true });
-        return;
+        return ctx.answerCallbackQuery({ text: `Wait ${remaining}h for next claim!`, show_alert: true });
       }
     }
 
@@ -316,20 +333,13 @@ function setupUserCommands(bot, findUserByQuery) {
 
     await ctx.answerCallbackQuery({ text: 'Claimed +50 points!' });
 
-    const ad = await fetchAdsgramAd(ctx.from.id);
-    let message = `🎁 You claimed <b>50 daily points</b>!\nNew Balance: <b>${user.points} points</b>`;
-
-    const keyboard = new InlineKeyboard();
-    if (ad) {
-      message += `\n\n━━━━━━━━━━━━━━━━━━━━\n📢 <b>Sponsored:</b>\n${ad.title}`;
-      if (ad.link) keyboard.url('👉 View Sponsor', ad.link).row();
-    }
-    keyboard.text('🔙 Main Menu', 'btn_back');
+    const message = `🎁 You claimed <b>50 daily points</b>!\n🪙 New Balance: <b>${user.points} points</b>`;
+    const keyboard = new InlineKeyboard().text('🔙 Main Menu', 'btn_back');
 
     await ctx.reply(message, { parse_mode: 'HTML', reply_markup: keyboard });
   });
 
-  // Handle "Referral Link" Button
+  // Handle Referral System
   const handleReferral = async (ctx) => {
     const user = await User.findOne({ telegramId: ctx.from.id });
     if (!user) {
@@ -356,34 +366,23 @@ function setupUserCommands(bot, findUserByQuery) {
   bot.callbackQuery('btn_referral', handleReferral);
   bot.callbackQuery('earn_referral', handleReferral);
 
-  // Handle "Help" Button
+  // Handle "Help"
   bot.callbackQuery('btn_help', async (ctx) => {
-    try {
-      await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery();
 
-      const helpText = 
-        `❓ <b>HELP & COMMANDS GUIDE</b>\n` +
-        `━━━━━━━━━━━━━━━━━━━━\n` +
-        `🔑 <code>/login &lt;code&gt;</code> - Sign in with your 6-digit access code\n` +
-        `ℹ️ <code>/info</code> - View your profile details\n` +
-        `💰 <code>/earn</code> - Open the Rewards Center\n` +
-        `📢 <code>/advertise</code> - Contact admin to purchase direct ads\n\n` +
-        `💡 <b>Features:</b>\n` +
-        `• <b>My Profile:</b> View your account info, points balance, and access code.\n` +
-        `• <b>Earn Rewards:</b> Complete tasks, watch Adsgram ads, and use direct referral links.\n` +
-        `• <b>Daily Bonus:</b> Claim free daily points once every 24 hours.\n` +
-        `• <b>Referral Link:</b> Invite friends to earn extra rewards.\n\n` +
-        `📩 Need assistance? Contact admin support: <a href="https://t.me/dinos_service">@dinos_service</a>`;
+    const helpText = 
+      `❓ <b>HELP & COMMANDS GUIDE</b>\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `🔑 <code>/login &lt;code&gt;</code> - Sign in with your 6-digit access code\n` +
+      `ℹ️ <code>/info</code> - View your profile details\n` +
+      `💰 <code>/earn</code> - Open the Rewards Center\n` +
+      `📢 <code>/advertise</code> - Purchase direct promotions\n\n` +
+      `💡 <b>Features:</b>\n` +
+      `• <b>Tasks:</b> Join official communities to earn points.\n` +
+      `• <b>Daily Bonus:</b> Claim free daily rewards every 24 hours.\n` +
+      `• <b>Referral Link:</b> Invite friends for extra points.`;
 
-      await ctx.editMessageText(helpText, {
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-        reply_markup: getBackKeyboard()
-      });
-    } catch (err) {
-      console.error('Error in btn_help handler:', err);
-      await ctx.answerCallbackQuery({ text: '⚠️ An error occurred.', show_alert: true }).catch(() => {});
-    }
+    await ctx.editMessageText(helpText, { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
   });
 
   // Direct Ad Sales Command
@@ -392,11 +391,7 @@ function setupUserCommands(bot, findUserByQuery) {
       `📢 <b>ADVERTISE WITH US</b>\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `Promote your channel, product, or bot to our active user base!\n\n` +
-      `⚡ <b>Why advertise here?</b>\n` +
-      `• Direct inbox notification to all active users\n` +
-      `• High engagement & real user clicks\n` +
-      `• Instant broadcast delivery\n\n` +
-      `💳 <b>Accepted Payments:</b> USDT, TON, Crypto Bot (@send)\n\n` +
+      `💳 <b>Accepted Payments:</b> USDT, TON, Crypto Bot (@send)\n` +
       `📩 <b>Contact Admin to Buy:</b> <a href="https://t.me/dinos_service">@dinos_service</a>`;
 
     await ctx.reply(adMessage, { parse_mode: 'HTML', disable_web_page_preview: true });
