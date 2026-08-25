@@ -1,4 +1,3 @@
-// user.js
 const { InlineKeyboard } = require('grammy');
 const { User, AccessCode } = require('./models');
 
@@ -19,8 +18,10 @@ async function generateUniqueAccessCode(AccessCodeModel, UserModel) {
     const randomNumber = Math.floor(Math.random() * (999999 - 16 + 1)) + 16;
     newCode = randomNumber.toString().padStart(6, '0');
 
-    const existingCode = await AccessCodeModel.findOne({ code: newCode });
-    const existingUser = await UserModel.findOne({ accessCode: newCode });
+    const [existingCode, existingUser] = await Promise.all([
+      AccessCodeModel.findOne({ code: newCode }),
+      UserModel.findOne({ accessCode: newCode }),
+    ]);
 
     if (!existingCode && !existingUser) {
       isUnique = true;
@@ -130,27 +131,26 @@ function setupUserCommands(bot, findUserByQuery) {
     await ctx.reply(formatUserInfo(targetUser), { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
   });
 
-// 💸 Transfer Points Menu Guide
-const handleTransferMenu = async (ctx) => {
-  const text = 
-    `💸 <b>POINT TRANSFER SYSTEM</b>\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `Send points directly to any registered user using their <b>Access Code</b> or <b>Telegram ID</b>.\n\n` +
-    `🏷️ <b>Transfer Tax Fee:</b> <code>${TRANSFER_TAX_PERCENT}%</code>\n\n` +
-    `📌 <b>Command Format:</b>\n` +
-    `<code>/transfer <Recipient Code/ID> <Amount></code>\n\n` +
-    `💡 <b>Examples:</b>\n` +
-    `• <code>/transfer 000005 100</code>\n` +
-    `• <code>/transfer 123456789 500</code>`;
+  // 💸 Transfer Points Menu Guide
+  const handleTransferMenu = async (ctx) => {
+    const text = 
+      `💸 <b>POINT TRANSFER SYSTEM</b>\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `Send points directly to any registered user using their <b>Access Code</b> or <b>Telegram ID</b>.\n\n` +
+      `🏷️ <b>Transfer Tax Fee:</b> <code>${TRANSFER_TAX_PERCENT}%</code>\n\n` +
+      `📌 <b>Command Format:</b>\n` +
+      `<code>/transfer <Recipient Code/ID> <Amount></code>\n\n` +
+      `💡 <b>Examples:</b>\n` +
+      `• <code>/transfer 000005 100</code>\n` +
+      `• <code>/transfer 123456789 500</code>`;
 
-  if (ctx.callbackQuery) {
-    // Safely attempt to answer callback query without crashing if expired
-    await ctx.answerCallbackQuery().catch(() => {});
-    await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: getBackKeyboard() }).catch(() => {});
-  } else {
-    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
-  }
-};
+    if (ctx.callbackQuery) {
+      await ctx.answerCallbackQuery().catch(() => {});
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: getBackKeyboard() }).catch(() => {});
+    } else {
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
+    }
+  };
 
   bot.callbackQuery('menu_transfer', handleTransferMenu);
 
@@ -222,7 +222,7 @@ const handleTransferMenu = async (ctx) => {
         { parse_mode: 'HTML' }
       );
     } catch (err) {
-      // Recipient blocked bot
+      // Recipient blocked bot or chat unavailable
     }
   });
 
@@ -243,8 +243,8 @@ const handleTransferMenu = async (ctx) => {
       .text('🔙 Main Menu', 'btn_back');
 
     if (ctx.callbackQuery) {
-      await ctx.answerCallbackQuery();
-      await ctx.editMessageText(message, { parse_mode: 'HTML', reply_markup: keyboard });
+      await ctx.answerCallbackQuery().catch(() => {});
+      await ctx.editMessageText(message, { parse_mode: 'HTML', reply_markup: keyboard }).catch(() => {});
     } else {
       await ctx.reply(message, { parse_mode: 'HTML', reply_markup: keyboard });
     }
@@ -255,7 +255,7 @@ const handleTransferMenu = async (ctx) => {
 
   // 🎯 CALLBACK: Tasks Sub-Menu
   bot.callbackQuery('earn_tasks', async (ctx) => {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
 
     const user = await User.findOne({ telegramId: ctx.from.id });
     const completed = user?.completedTasks || [];
@@ -275,12 +275,12 @@ const handleTransferMenu = async (ctx) => {
       .text(`${groupDone} Join Group Task`, 'task_group_details').row()
       .text('🔙 Back to Earn Menu', 'menu_earn');
 
-    await ctx.editMessageText(message, { parse_mode: 'HTML', reply_markup: keyboard });
+    await ctx.editMessageText(message, { parse_mode: 'HTML', reply_markup: keyboard }).catch(() => {});
   });
 
   // 📢 TASK 1: Channel Task
   bot.callbackQuery('task_channel_details', async (ctx) => {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const user = await User.findOne({ telegramId: ctx.from.id });
     const taskId = `join_${SPONSOR_CHANNEL.toLowerCase()}`;
     const isCompleted = user?.completedTasks?.includes(taskId);
@@ -301,7 +301,7 @@ const handleTransferMenu = async (ctx) => {
     }
     keyboard.text('🔙 Back to Tasks', 'earn_tasks');
 
-    await ctx.editMessageText(message, { parse_mode: 'HTML', reply_markup: keyboard });
+    await ctx.editMessageText(message, { parse_mode: 'HTML', reply_markup: keyboard }).catch(() => {});
   });
 
   bot.callbackQuery('verify_channel', async (ctx) => {
@@ -329,7 +329,7 @@ const handleTransferMenu = async (ctx) => {
           `You earned <b>+${TASK_REWARD_POINTS} Points</b> for joining ${SPONSOR_CHANNEL}.\n\n` +
           `🪙 <b>New Balance:</b> ${user.points} Points`,
           { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('🔙 Back to Tasks', 'earn_tasks') }
-        );
+        ).catch(() => {});
       } else {
         await ctx.answerCallbackQuery({ text: `❌ You haven't joined ${SPONSOR_CHANNEL} yet!`, show_alert: true });
       }
@@ -340,7 +340,7 @@ const handleTransferMenu = async (ctx) => {
 
   // 💬 TASK 2: Group Task
   bot.callbackQuery('task_group_details', async (ctx) => {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const user = await User.findOne({ telegramId: ctx.from.id });
     const taskId = `join_${SPONSOR_GROUP.toLowerCase()}`;
     const isCompleted = user?.completedTasks?.includes(taskId);
@@ -361,7 +361,7 @@ const handleTransferMenu = async (ctx) => {
     }
     keyboard.text('🔙 Back to Tasks', 'earn_tasks');
 
-    await ctx.editMessageText(message, { parse_mode: 'HTML', reply_markup: keyboard });
+    await ctx.editMessageText(message, { parse_mode: 'HTML', reply_markup: keyboard }).catch(() => {});
   });
 
   bot.callbackQuery('verify_group', async (ctx) => {
@@ -389,7 +389,7 @@ const handleTransferMenu = async (ctx) => {
           `You earned <b>+${TASK_REWARD_POINTS} Points</b> for joining ${SPONSOR_GROUP}.\n\n` +
           `🪙 <b>New Balance:</b> ${user.points} Points`,
           { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('🔙 Back to Tasks', 'earn_tasks') }
-        );
+        ).catch(() => {});
       } else {
         await ctx.answerCallbackQuery({ text: `❌ You haven't joined ${SPONSOR_GROUP} yet!`, show_alert: true });
       }
@@ -402,15 +402,15 @@ const handleTransferMenu = async (ctx) => {
   bot.callbackQuery('btn_profile', async (ctx) => {
     const user = await User.findOne({ telegramId: Number(ctx.from.id) });
     if (!user) return ctx.answerCallbackQuery({ text: '❌ Account not found.', show_alert: true });
-    await ctx.answerCallbackQuery();
-    await ctx.editMessageText(formatUserInfo(user), { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
+    await ctx.answerCallbackQuery().catch(() => {});
+    await ctx.editMessageText(formatUserInfo(user), { parse_mode: 'HTML', reply_markup: getBackKeyboard() }).catch(() => {});
   });
 
   // Handle "Back to Main Menu"
   bot.callbackQuery('btn_back', async (ctx) => {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
     const fullName = ctx.from.first_name || 'User';
-    await ctx.editMessageText(`Welcome back, ${fullName}! 👋\nSelect an option from the menu below:`, { reply_markup: getMainMenuKeyboard() });
+    await ctx.editMessageText(`Welcome back, ${fullName}! 👋\nSelect an option from the menu below:`, { reply_markup: getMainMenuKeyboard() }).catch(() => {});
   });
 
   // Handle "Daily Bonus"
@@ -453,8 +453,8 @@ const handleTransferMenu = async (ctx) => {
       `Share this link to earn bonus points when friends join!`;
 
     if (ctx.callbackQuery) {
-      await ctx.answerCallbackQuery();
-      await ctx.editMessageText(message, { parse_mode: 'HTML', reply_markup: getEarnBackKeyboard() });
+      await ctx.answerCallbackQuery().catch(() => {});
+      await ctx.editMessageText(message, { parse_mode: 'HTML', reply_markup: getEarnBackKeyboard() }).catch(() => {});
     } else {
       await ctx.reply(message, { parse_mode: 'HTML', reply_markup: getEarnBackKeyboard() });
     }
@@ -465,7 +465,7 @@ const handleTransferMenu = async (ctx) => {
 
   // Handle "Help"
   bot.callbackQuery('btn_help', async (ctx) => {
-    await ctx.answerCallbackQuery();
+    await ctx.answerCallbackQuery().catch(() => {});
 
     const helpText = 
       `❓ <b>HELP & COMMANDS GUIDE</b>\n` +
@@ -480,7 +480,7 @@ const handleTransferMenu = async (ctx) => {
       `• <b>Daily Bonus:</b> Claim free daily rewards every 24 hours.\n` +
       `• <b>Referral Link:</b> Invite friends for extra points.`;
 
-    await ctx.editMessageText(helpText, { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
+    await ctx.editMessageText(helpText, { parse_mode: 'HTML', reply_markup: getBackKeyboard() }).catch(() => {});
   });
 
   // Support Command
