@@ -18,6 +18,21 @@ http.createServer((req, res) => {
 
 const bot = new Bot(process.env.BOT_TOKEN);
 
+// Global Error Handler - Prevents bot from stopping on Telegram API errors
+bot.catch((err) => {
+  const ctx = err.ctx;
+  console.error(`Error handling update ${ctx.update.update_id}:`);
+  const e = err.error;
+
+  if (e instanceof GrammyError) {
+    console.error('Error in request:', e.description);
+  } else if (e instanceof HttpError) {
+    console.error('Could not contact Telegram:', e);
+  } else {
+    console.error('Unknown error:', e);
+  }
+});
+
 // Helper function to lookup users by Access Code, Telegram ID, or Username
 async function findUserByQuery(query) {
   if (!query) return null;
