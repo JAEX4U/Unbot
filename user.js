@@ -130,26 +130,27 @@ function setupUserCommands(bot, findUserByQuery) {
     await ctx.reply(formatUserInfo(targetUser), { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
   });
 
-  // 💸 Transfer Points Menu Guide
-  const handleTransferMenu = async (ctx) => {
-    const text = 
-      `💸 <b>POINT TRANSFER SYSTEM</b>\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
-      `Send points directly to any registered user using their <b>Access Code</b> or <b>Telegram ID</b>.\n\n` +
-      `🏷️ <b>Transfer Tax Fee:</b> <code>${TRANSFER_TAX_PERCENT}%</code>\n\n` +
-      `📌 <b>Command Format:</b>\n` +
-      `<code>/transfer <Recipient Code/ID> <Amount></code>\n\n` +
-      `💡 <b>Examples:</b>\n` +
-      `• <code>/transfer 000005 100</code>\n` +
-      `• <code>/transfer 123456789 500</code>`;
+// 💸 Transfer Points Menu Guide
+const handleTransferMenu = async (ctx) => {
+  const text = 
+    `💸 <b>POINT TRANSFER SYSTEM</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `Send points directly to any registered user using their <b>Access Code</b> or <b>Telegram ID</b>.\n\n` +
+    `🏷️ <b>Transfer Tax Fee:</b> <code>${TRANSFER_TAX_PERCENT}%</code>\n\n` +
+    `📌 <b>Command Format:</b>\n` +
+    `<code>/transfer <Recipient Code/ID> <Amount></code>\n\n` +
+    `💡 <b>Examples:</b>\n` +
+    `• <code>/transfer 000005 100</code>\n` +
+    `• <code>/transfer 123456789 500</code>`;
 
-    if (ctx.callbackQuery) {
-      await ctx.answerCallbackQuery();
-      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
-    } else {
-      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
-    }
-  };
+  if (ctx.callbackQuery) {
+    // Safely attempt to answer callback query without crashing if expired
+    await ctx.answerCallbackQuery().catch(() => {});
+    await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: getBackKeyboard() }).catch(() => {});
+  } else {
+    await ctx.reply(text, { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
+  }
+};
 
   bot.callbackQuery('menu_transfer', handleTransferMenu);
 
