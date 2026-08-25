@@ -7,8 +7,12 @@ const { User } = require('./models');
 // Module Routes
 const { setupUserCommands } = require('./user');
 const { setupAdCommands } = require('./ads');
-// const { setupAdminCommands } = require('./admin'); // Uncomment if using admin.js
+const { setupAdminCommands } = require('./admin'); // Uncommented
 
+// Inside main function:
+setupUserCommands(bot, findUserByQuery);
+setupAdCommands(bot, ADMIN_IDS);
+setupAdminCommands(bot, findUserByQuery); // Added
 // ⚙️ Configurations & Environment Variables
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const MONGO_URI = process.env.MONGO_URI;
