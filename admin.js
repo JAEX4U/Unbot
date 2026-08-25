@@ -100,7 +100,7 @@ function setupAdminCommands(bot, findUserByQuery) {
     await ctx.reply(`🚀 Starting Ad Campaign <b>"${adTitle}"</b> to ${activeUsers.length} users...`, { parse_mode: 'HTML' });
 
     let successCount = 0;
-    const formattedAd = `📢 <b>SPONSORED ANNOUNCEMENT</b>\n<b>${adTitle}</b>\n━━━━━━━━━━━━━━━━━━━━\n${adContent}`;
+    const formattedAd = `📢 <b>ANNOUNCEMENT</b>\n<b>${adTitle}</b>\n━━━━━━━━━━━━━━━━━━━━\n${adContent}`;
 
     for (const u of activeUsers) {
       try {
