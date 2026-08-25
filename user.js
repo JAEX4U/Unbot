@@ -7,6 +7,9 @@ const SPONSOR_CHANNEL = '@Unlab02_Channel'; // Replace with your actual channel
 const SPONSOR_GROUP = '@Unlab02_Group';     // Replace with your actual group
 const TASK_REWARD_POINTS = 100;
 
+// ⚙️ Transfer Tax Fee (5 = 5% tax fee on transfers)
+const TRANSFER_TAX_PERCENT = 5;
+
 // 🔑 Unique Code Generator (Reserves 000001 - 000015 for Admin Agent Codes)
 async function generateUniqueAccessCode(AccessCodeModel, UserModel) {
   let isUnique = false;
@@ -32,9 +35,10 @@ function getMainMenuKeyboard() {
     .text('👤 My Profile', 'btn_profile')
     .text('💰 Earn Rewards', 'menu_earn')
     .row()
+    .text('💸 Send Points', 'menu_transfer')
     .text('🎁 Daily Bonus', 'btn_daily')
-    .text('👥 Referral Link', 'btn_referral')
     .row()
+    .text('👥 Referral Link', 'btn_referral')
     .text('❓ Help', 'btn_help');
 }
 
@@ -124,6 +128,101 @@ function setupUserCommands(bot, findUserByQuery) {
     if (!targetUser) return ctx.reply('❌ User not found in database.', { parse_mode: 'HTML' });
 
     await ctx.reply(formatUserInfo(targetUser), { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
+  });
+
+  // 💸 Transfer Points Menu Guide
+  const handleTransferMenu = async (ctx) => {
+    const text = 
+      `💸 <b>POINT TRANSFER SYSTEM</b>\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `Send points directly to any registered user using their <b>Access Code</b> or <b>Telegram ID</b>.\n\n` +
+      `🏷️ <b>Transfer Tax Fee:</b> <code>${TRANSFER_TAX_PERCENT}%</code>\n\n` +
+      `📌 <b>Command Format:</b>\n` +
+      `<code>/transfer <Recipient Code/ID> <Amount></code>\n\n` +
+      `💡 <b>Examples:</b>\n` +
+      `• <code>/transfer 000005 100</code>\n` +
+      `• <code>/transfer 123456789 500</code>`;
+
+    if (ctx.callbackQuery) {
+      await ctx.answerCallbackQuery();
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
+    } else {
+      await ctx.reply(text, { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
+    }
+  };
+
+  bot.callbackQuery('menu_transfer', handleTransferMenu);
+
+  // 💸 Command: /transfer <target> <amount> (P2P Transfer with Tax)
+  bot.command('transfer', async (ctx) => {
+    const sender = await User.findOne({ telegramId: ctx.from.id });
+    if (!sender) return ctx.reply('❌ Please complete registration first with /start.');
+    if (sender.isBanned || sender.isSuspended) return ctx.reply('❌ Your account is currently restricted.');
+
+    const args = ctx.match ? ctx.match.trim().split(/\s+/) : [];
+    const targetQuery = args[0];
+    const amount = Number(args[1]);
+
+    if (!targetQuery || isNaN(amount) || amount <= 0) {
+      return ctx.reply(
+        `⚠️ <b>Invalid Command Format!</b>\n\n` +
+        `Usage: <code>/transfer <Recipient Code/ID> <Amount></code>\n` +
+        `Example: <code>/transfer 000005 100</code>`,
+        { parse_mode: 'HTML' }
+      );
+    }
+
+    const recipient = await findUserByQuery(targetQuery);
+    if (!recipient) {
+      return ctx.reply('❌ Recipient user not found. Please verify the code or ID.');
+    }
+
+    if (recipient.telegramId === sender.telegramId) {
+      return ctx.reply('❌ You cannot transfer points to yourself.');
+    }
+
+    const grossAmount = Math.floor(amount);
+    const taxFee = Math.ceil((grossAmount * TRANSFER_TAX_PERCENT) / 100);
+    const netReceived = grossAmount - taxFee;
+
+    if (netReceived <= 0) {
+      return ctx.reply(`❌ Transfer amount is too low after the ${TRANSFER_TAX_PERCENT}% tax fee.`);
+    }
+
+    if (sender.points < grossAmount) {
+      return ctx.reply(`❌ <b>Insufficient Balance!</b>\nYour Balance: <b>${sender.points} points</b>`, { parse_mode: 'HTML' });
+    }
+
+    sender.points -= grossAmount;
+    recipient.points += netReceived;
+
+    await sender.save();
+    await recipient.save();
+
+    await ctx.reply(
+      `✅ <b>Transfer Successful!</b>\n` +
+      `━━━━━━━━━━━━━━━━━━━━\n` +
+      `👤 <b>Sent To:</b> ${recipient.firstName} (<code>${recipient.accessCode}</code>)\n` +
+      `🪙 <b>Gross Amount:</b> ${grossAmount} pts\n` +
+      `🏷️ <b>Tax Fee (${TRANSFER_TAX_PERCENT}%):</b> -${taxFee} pts\n` +
+      `📥 <b>Net Delivered:</b> ${netReceived} pts\n` +
+      `💰 <b>Your New Balance:</b> ${sender.points} pts`,
+      { parse_mode: 'HTML', reply_markup: getMainMenuKeyboard() }
+    );
+
+    try {
+      await bot.api.sendMessage(
+        recipient.telegramId,
+        `🎉 <b>POINTS RECEIVED!</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `👤 <b>From:</b> ${sender.firstName} (<code>${sender.accessCode}</code>)\n` +
+        `📥 <b>Received:</b> +${netReceived} pts\n` +
+        `💰 <b>New Balance:</b> ${recipient.points} pts`,
+        { parse_mode: 'HTML' }
+      );
+    } catch (err) {
+      // Recipient blocked bot
+    }
   });
 
   // 💰 Earn Rewards Hub
@@ -371,9 +470,11 @@ function setupUserCommands(bot, findUserByQuery) {
       `❓ <b>HELP & COMMANDS GUIDE</b>\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `ℹ️ <code>/info</code> - View your profile details\n` +
+      `💸 <code>/transfer <Code/ID> <Amount></code> - Send points to a user\n` +
       `💰 <code>/earn</code> - Open the Rewards Center\n` +
       `💬 <code>/support</code> - Contact Admin for inquiries\n\n` +
       `💡 <b>Features:</b>\n` +
+      `• <b>Send Points:</b> Transfer your points to other users with a ${TRANSFER_TAX_PERCENT}% tax.\n` +
       `• <b>Tasks:</b> Join official communities to earn points.\n` +
       `• <b>Daily Bonus:</b> Claim free daily rewards every 24 hours.\n` +
       `• <b>Referral Link:</b> Invite friends for extra points.`;
