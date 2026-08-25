@@ -34,7 +34,7 @@ function setupAdminCommands(bot, findUserByQuery) {
 
     const totalUsers = await User.countDocuments();
     const totalCodes = await AccessCode.countDocuments();
-    const unusedCodes = await AccessCode.countDocuments({ isUsed: false });
+    const agentCodesCount = await AccessCode.countDocuments({ isAgentCode: true });
     const bannedUsers = await User.countDocuments({ isBanned: true });
     const suspendedUsers = await User.countDocuments({ isSuspended: true });
     const totalAds = await AdCampaign.countDocuments();
@@ -44,11 +44,11 @@ function setupAdminCommands(bot, findUserByQuery) {
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `👥 <b>Total Users:</b> ${totalUsers}\n` +
       `🔴 <b>Banned:</b> ${bannedUsers} | 🟡 <b>Suspended:</b> ${suspendedUsers}\n` +
-      `🔑 <b>Total Codes:</b> ${totalCodes} (🟢 <b>Unused:</b> ${unusedCodes})\n` +
+      `🔑 <b>Total Codes:</b> ${totalCodes} (🕵️ <b>Agent Codes:</b> ${agentCodesCount})\n` +
       `📢 <b>Ad Campaigns:</b> ${totalAds}\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
       `<b>User & Access Commands:</b>\n` +
-      `• <code>/val &lt;6-digit-code&gt;</code> - Create access code\n` +
+      `• <code>/val &lt;000001-000015&gt;</code> - Create reserved agent code\n` +
       `• <code>/codes</code> - View generated codes\n` +
       `• <code>/ban &lt;id|code|@user&gt;</code> - Ban a user\n` +
       `• <code>/unban &lt;id|code|@user&gt;</code> - Unban/Unsuspend user\n` +
@@ -210,23 +210,32 @@ function setupAdminCommands(bot, findUserByQuery) {
     await ctx.reply(`🟡 User <b>${user.firstName}</b> (<code>${user.telegramId}</code>) is now <b>SUSPENDED</b>.`, { parse_mode: 'HTML' });
   });
 
-  // 🔑 Generate Access Code: /val 888888
+  // 🔑 Create Reserved Agent Code (000001 - 000015): /val 000005
   bot.command('val', async (ctx) => {
     if (!isAdmin(ctx)) return;
 
-    const codeArg = ctx.match.trim();
-    if (!codeArg || codeArg.length !== 6 || isNaN(codeArg)) {
-      return ctx.reply('⚠️ Please specify a valid 6-digit numeric code. Example: <code>/val 888888</code>', { parse_mode: 'HTML' });
+    const codeArg = ctx.match.trim().padStart(6, '0');
+    const codeNum = parseInt(codeArg, 10);
+
+    if (isNaN(codeNum) || codeNum < 1 || codeNum > 15) {
+      return ctx.reply('⚠️ Reserved agent codes must be between <code>000001</code> and <code>000015</code>.\nExample: <code>/val 000005</code>', { parse_mode: 'HTML' });
     }
 
     try {
       const existingCode = await AccessCode.findOne({ code: codeArg });
-      if (existingCode) {
-        return ctx.reply('⚠️ This code already exists in the database.');
+      const existingUser = await User.findOne({ accessCode: codeArg });
+
+      if (existingCode || existingUser) {
+        return ctx.reply(`⚠️ Code <code>${codeArg}</code> already exists in database.`, { parse_mode: 'HTML' });
       }
 
-      await AccessCode.create({ code: codeArg, createdBy: ctx.from.id });
-      await ctx.reply(`✅ <b>Access Code Created:</b> <code>${codeArg}</code>\nUsers can now register using <code>/login ${codeArg}</code>`, { parse_mode: 'HTML' });
+      await AccessCode.create({ 
+        code: codeArg, 
+        isUsed: false,
+        isAgentCode: true 
+      });
+
+      await ctx.reply(`✅ <b>Reserved Agent Code Created:</b> <code>${codeArg}</code>`, { parse_mode: 'HTML' });
     } catch (err) {
       await ctx.reply('❌ Error generating access code.');
     }
@@ -241,8 +250,9 @@ function setupAdminCommands(bot, findUserByQuery) {
 
     let message = `🔑 <b>Access Codes List (Latest 20):</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
     codes.forEach(c => {
+      const typeLabel = c.isAgentCode ? '🕵️ Agent Code' : '👤 User Code';
       const status = c.isUsed ? `🔴 Used (by <code>${c.usedByTelegramId}</code>)` : `🟢 Unused`;
-      message += `• Code: <code>${c.code}</code> | ${status}\n`;
+      message += `• Code: <code>${c.code}</code> | ${typeLabel} | ${status}\n`;
     });
 
     await ctx.reply(message, { parse_mode: 'HTML' });
