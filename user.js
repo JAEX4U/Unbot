@@ -7,6 +7,25 @@ const SPONSOR_CHANNEL = '@Unlab02_Channel'; // Replace with your actual channel
 const SPONSOR_GROUP = '@Unlab02_Group';     // Replace with your actual group
 const TASK_REWARD_POINTS = 100;
 
+// 🔑 Unique Code Generator (Reserves 000001 - 000015 for Admin Agent Codes)
+async function generateUniqueAccessCode(AccessCodeModel, UserModel) {
+  let isUnique = false;
+  let newCode = '';
+
+  while (!isUnique) {
+    const randomNumber = Math.floor(Math.random() * (999999 - 16 + 1)) + 16;
+    newCode = randomNumber.toString().padStart(6, '0');
+
+    const existingCode = await AccessCodeModel.findOne({ code: newCode });
+    const existingUser = await UserModel.findOne({ accessCode: newCode });
+
+    if (!existingCode && !existingUser) {
+      isUnique = true;
+    }
+  }
+  return newCode;
+}
+
 // 🔘 Navigation Keyboards
 function getMainMenuKeyboard() {
   return new InlineKeyboard()
@@ -40,7 +59,7 @@ function formatUserInfo(user) {
   return `<b>👤 USER PROFILE DETAILS</b>\n` +
          `━━━━━━━━━━━━━━━━━━━━\n` +
          `📛 <b>Name:</b> ${fullName}\n` +
-         `🆔 <b>ID (Access Code):</b> <code>${user.accessCode}</code>\n` +
+         `🔑 <b>Access Code:</b> <code>${user.accessCode}</code>\n` +
          `📲 <b>Telegram ID:</b> <code>${user.telegramId}</code>\n` +
          `🏷️ <b>Username:</b> ${usernameDisplay}\n` +
          `🪙 <b>Points Balance:</b> <b>${user.points} points</b>\n` +
@@ -51,21 +70,44 @@ function formatUserInfo(user) {
 
 function setupUserCommands(bot, findUserByQuery) {
 
-  // Command: /start
+  // Command: /start (Auto Registration with Collision & Range Check)
   bot.command('start', async (ctx) => {
-    const user = await User.findOne({ telegramId: ctx.from.id });
+    let user = await User.findOne({ telegramId: ctx.from.id });
 
     if (user) {
       const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ') || 'User';
       return ctx.reply(`Welcome back, ${fullName}! 👋\nSelect an option from the menu below:`, { reply_markup: getMainMenuKeyboard() });
     }
 
+    // Generate unique code starting from 000016 upwards
+    const generatedCode = await generateUniqueAccessCode(AccessCode, User);
+
+    await AccessCode.create({
+      code: generatedCode,
+      isUsed: true,
+      usedByTelegramId: ctx.from.id,
+      isAgentCode: false
+    });
+
+    user = await User.create({
+      telegramId: ctx.from.id,
+      username: ctx.from.username || 'No Username',
+      firstName: ctx.from.first_name || '',
+      lastName: ctx.from.last_name || '',
+      points: 100,
+      accessCode: generatedCode,
+      completedTasks: []
+    });
+
+    const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ') || 'User';
+
     await ctx.reply(
-      `👋 Hello ${ctx.from.first_name}!\n\n` +
-      `🔒 This bot requires an official invite code to activate your account.\n\n` +
-      `Please type: <code>/login &lt;6-digit-code&gt;</code> to sign in.\n` +
-      `Example: <code>/login 888888</code>`,
-      { parse_mode: 'HTML' }
+      `🎉 <b>Welcome to the Bot, ${fullName}!</b>\n\n` +
+      `Your account has been created!\n` +
+      `🔑 <b>Your Access Code:</b> <code>${generatedCode}</code>\n` +
+      `🪙 <b>Starting Balance:</b> ${user.points} points\n\n` +
+      `Choose an option below:`,
+      { parse_mode: 'HTML', reply_markup: getMainMenuKeyboard() }
     );
   });
 
@@ -74,7 +116,7 @@ function setupUserCommands(bot, findUserByQuery) {
     const query = ctx.match ? ctx.match.trim() : '';
     if (!query) {
       const selfUser = await User.findOne({ telegramId: ctx.from.id });
-      if (!selfUser) return ctx.reply('⚠️ Please provide an Access Code, Telegram ID, or Username.\nExample: <code>/info 888888</code>', { parse_mode: 'HTML' });
+      if (!selfUser) return ctx.reply('⚠️ User profile not found.', { parse_mode: 'HTML' });
       return ctx.reply(formatUserInfo(selfUser), { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
     }
 
@@ -82,48 +124,6 @@ function setupUserCommands(bot, findUserByQuery) {
     if (!targetUser) return ctx.reply('❌ User not found in database.', { parse_mode: 'HTML' });
 
     await ctx.reply(formatUserInfo(targetUser), { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
-  });
-
-  // Command: /login
-  bot.command('login', async (ctx) => {
-    const codeInput = ctx.match ? ctx.match.trim() : '';
-    if (!codeInput || codeInput.length !== 6) {
-      return ctx.reply('⚠️ Usage: Send <code>/login &lt;6-digit-code&gt;</code>. Example: <code>/login 888888</code>', { parse_mode: 'HTML' });
-    }
-
-    let user = await User.findOne({ telegramId: ctx.from.id });
-    if (user) {
-      return ctx.reply(`✅ You are already logged in with code <code>${user.accessCode}</code>!`, { parse_mode: 'HTML', reply_markup: getMainMenuKeyboard() });
-    }
-
-    const validCode = await AccessCode.findOne({ code: codeInput, isUsed: false });
-    if (!validCode) {
-      return ctx.reply('❌ Invalid or already used access code. Please check with the admin.');
-    }
-
-    validCode.isUsed = true;
-    validCode.usedByTelegramId = ctx.from.id;
-    await validCode.save();
-
-    user = await User.create({
-      telegramId: ctx.from.id,
-      username: ctx.from.username || 'No Username',
-      firstName: ctx.from.first_name || '',
-      lastName: ctx.from.last_name || '',
-      points: 100,
-      accessCode: codeInput,
-      completedTasks: []
-    });
-
-    const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ') || 'User';
-
-    await ctx.reply(
-      `🎉 <b>Welcome to the Bot, ${fullName}!</b>\n\n` +
-      `Your account has been created.\n` +
-      `🪙 <b>Starting Balance:</b> ${user.points} points\n\n` +
-      `Choose an option below:`,
-      { parse_mode: 'HTML', reply_markup: getMainMenuKeyboard() }
-    );
   });
 
   // 💰 Earn Rewards Hub
@@ -178,7 +178,7 @@ function setupUserCommands(bot, findUserByQuery) {
     await ctx.editMessageText(message, { parse_mode: 'HTML', reply_markup: keyboard });
   });
 
-  // 📢 TASK 1: Join Channel Details & Verification
+  // 📢 TASK 1: Channel Task
   bot.callbackQuery('task_channel_details', async (ctx) => {
     await ctx.answerCallbackQuery();
     const user = await User.findOne({ telegramId: ctx.from.id });
@@ -238,7 +238,7 @@ function setupUserCommands(bot, findUserByQuery) {
     }
   });
 
-  // 💬 TASK 2: Join Group Details & Verification
+  // 💬 TASK 2: Group Task
   bot.callbackQuery('task_group_details', async (ctx) => {
     await ctx.answerCallbackQuery();
     const user = await User.findOne({ telegramId: ctx.from.id });
@@ -301,7 +301,7 @@ function setupUserCommands(bot, findUserByQuery) {
   // Handle "My Profile"
   bot.callbackQuery('btn_profile', async (ctx) => {
     const user = await User.findOne({ telegramId: Number(ctx.from.id) });
-    if (!user) return ctx.answerCallbackQuery({ text: '❌ Account not found. Use /login <code_id>', show_alert: true });
+    if (!user) return ctx.answerCallbackQuery({ text: '❌ Account not found.', show_alert: true });
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(formatUserInfo(user), { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
   });
@@ -316,7 +316,7 @@ function setupUserCommands(bot, findUserByQuery) {
   // Handle "Daily Bonus"
   bot.callbackQuery('btn_daily', async (ctx) => {
     const user = await User.findOne({ telegramId: ctx.from.id });
-    if (!user) return ctx.answerCallbackQuery({ text: 'Please log in first using /login <code>' });
+    if (!user) return ctx.answerCallbackQuery({ text: 'Account not found.' });
 
     const now = new Date();
     if (user.lastDailyClaim) {
@@ -342,10 +342,7 @@ function setupUserCommands(bot, findUserByQuery) {
   // Handle Referral System
   const handleReferral = async (ctx) => {
     const user = await User.findOne({ telegramId: ctx.from.id });
-    if (!user) {
-      if (ctx.callbackQuery) return ctx.answerCallbackQuery({ text: 'Please log in first using /login <code>' });
-      return ctx.reply('Please log in first using /login <code>');
-    }
+    if (!user) return ctx.reply('Account not found.');
 
     const botInfo = await bot.api.getMe();
     const refLink = `https://t.me/${botInfo.username}?start=ref_${user.telegramId}`;
@@ -373,10 +370,9 @@ function setupUserCommands(bot, findUserByQuery) {
     const helpText = 
       `❓ <b>HELP & COMMANDS GUIDE</b>\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `🔑 <code>/login &lt;code&gt;</code> - Sign in with your 6-digit access code\n` +
       `ℹ️ <code>/info</code> - View your profile details\n` +
       `💰 <code>/earn</code> - Open the Rewards Center\n` +
-      `📢 <code>/advertise</code> - Purchase direct promotions\n\n` +
+      `💬 <code>/support</code> - Contact Admin for inquiries\n\n` +
       `💡 <b>Features:</b>\n` +
       `• <b>Tasks:</b> Join official communities to earn points.\n` +
       `• <b>Daily Bonus:</b> Claim free daily rewards every 24 hours.\n` +
@@ -385,16 +381,15 @@ function setupUserCommands(bot, findUserByQuery) {
     await ctx.editMessageText(helpText, { parse_mode: 'HTML', reply_markup: getBackKeyboard() });
   });
 
-  // Direct Ad Sales Command
-  bot.command('advertise', async (ctx) => {
-    const adMessage = 
-      `📢 <b>ADVERTISE WITH US</b>\n` +
+  // Support Command
+  bot.command('support', async (ctx) => {
+    const supportMessage = 
+      `💬 <b>SUPPORT & INQUIRIES</b>\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `Promote your channel, product, or bot to our active user base!\n\n` +
-      `💳 <b>Accepted Payments:</b> USDT, TON, Crypto Bot (@send)\n` +
-      `📩 <b>Contact Admin to Buy:</b> <a href="https://t.me/dinos_service">@dinos_service</a>`;
+      `Have questions, need help, or want to report an issue?\n\n` +
+      `📩 <b>Contact Admin:</b> <a href="https://t.me/dinos_service">@dinos_service</a>`;
 
-    await ctx.reply(adMessage, { parse_mode: 'HTML', disable_web_page_preview: true });
+    await ctx.reply(supportMessage, { parse_mode: 'HTML', disable_web_page_preview: true });
   });
 }
 
