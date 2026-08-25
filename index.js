@@ -29,8 +29,16 @@ async function findUserByQuery(query) {
 setupUserCommands(bot, findUserByQuery);
 setupAdminCommands(bot, findUserByQuery);
 
+// Validate MongoDB URI before connecting
+const mongoUri = process.env.MONGODB_URI;
+
+if (!mongoUri) {
+  console.error('❌ CRITICAL ERROR: MONGODB_URI environment variable is missing on Render!');
+  process.exit(1);
+}
+
 // Database Connection & Launch
-mongoose.connect(process.env.MONGODB_URI)
+mongoose.connect(mongoUri)
   .then(() => {
     console.log('✅ Connected to MongoDB successfully.');
     bot.start({
