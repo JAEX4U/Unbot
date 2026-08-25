@@ -1,75 +1,100 @@
 // index.js
 require('dotenv').config();
-const http = require('http'); // 1. Import HTTP module
-const { Bot } = require('grammy');
+const { Bot, GrammyError, HttpError } = require('grammy');
 const mongoose = require('mongoose');
-const { User, AccessCode } = require('./models');
+const { User } = require('./models');
+
+// Module Routes
 const { setupUserCommands } = require('./user');
-const { setupAdminCommands } = require('./admin');
+const { setupAdCommands } = require('./ads');
+// const { setupAdminCommands } = require('./admin'); // Uncomment if using admin.js
 
-// 2. Add a dummy HTTP server to satisfy Render's Web Service health check
-const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot is running live!');
-}).listen(PORT, () => {
-  console.log(`🌐 Health check server listening on port ${PORT}`);
-});
+// ⚙️ Configurations & Environment Variables
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const MONGO_URI = process.env.MONGO_URI;
+const ADMIN_IDS = process.env.ADMIN_IDS 
+  ? process.env.ADMIN_IDS.split(',').map((id) => Number(id.trim()))
+  : [];
 
-const bot = new Bot(process.env.BOT_TOKEN);
-
-// Global Error Handler - Prevents bot from stopping on Telegram API errors
-bot.catch((err) => {
-  const ctx = err.ctx;
-  console.error(`Error handling update ${ctx.update.update_id}:`);
-  const e = err.error;
-
-  if (e instanceof GrammyError) {
-    console.error('Error in request:', e.description);
-  } else if (e instanceof HttpError) {
-    console.error('Could not contact Telegram:', e);
-  } else {
-    console.error('Unknown error:', e);
-  }
-});
-
-// Helper function to lookup users by Access Code, Telegram ID, or Username
-async function findUserByQuery(query) {
-  if (!query) return null;
-  const cleanQuery = query.replace('@', '').trim();
-
-  let user = await User.findOne({ accessCode: cleanQuery });
-  if (user) return user;
-
-  if (!isNaN(cleanQuery)) {
-    user = await User.findOne({ telegramId: Number(cleanQuery) });
-    if (user) return user;
-  }
-
-  user = await User.findOne({ username: new RegExp(`^${cleanQuery}$`, 'i') });
-  return user;
-}
-
-// Register Modules
-setupUserCommands(bot, findUserByQuery);
-setupAdminCommands(bot, findUserByQuery);
-
-// Validate MongoDB URI before connecting
-const mongoUri = process.env.MONGODB_URI;
-
-if (!mongoUri) {
-  console.error('❌ CRITICAL ERROR: MONGODB_URI environment variable is missing!');
+if (!BOT_TOKEN) {
+  console.error('❌ FATAL: BOT_TOKEN is missing from environment variables.');
   process.exit(1);
 }
 
-// Database Connection & Launch
-mongoose.connect(mongoUri)
-  .then(() => {
-    console.log('✅ Connected to MongoDB successfully.');
-    bot.start({
-      onStart: (info) => console.log(`🚀 Bot @${info.username} is running live!`)
+// 🤖 Initialize Bot
+const bot = new Bot(BOT_TOKEN);
+
+// 🛡️ 1. GLOBAL ERROR HANDLER (Prevents crashes from expired queries & API errors)
+bot.catch((err) => {
+  const ctx = err.ctx;
+  console.error(`⚠️ Error while handling update ${ctx.update.update_id}:`);
+  const e = err.error;
+
+  if (e instanceof GrammyError) {
+    console.error('Telegram API Error:', e.description);
+  } else if (e instanceof HttpError) {
+    console.error('Network Error (Could not contact Telegram):', e);
+  } else {
+    console.error('Unhandled Application Error:', e);
+  }
+});
+
+// 🔎 Helper: User Lookup Utility
+async function findUserByQuery(query) {
+  if (!query) return null;
+  const cleanQuery = query.trim();
+
+  let targetUser = await User.findOne({ accessCode: cleanQuery });
+
+  if (!targetUser && /^\d+$/.test(cleanQuery)) {
+    targetUser = await User.findOne({ telegramId: Number(cleanQuery) });
+  }
+
+  if (!targetUser) {
+    const cleanUsername = cleanQuery.replace('@', '');
+    targetUser = await User.findOne({ username: new RegExp(`^${cleanUsername}$`, 'i') });
+  }
+
+  return targetUser;
+}
+
+// 🚀 Start Application Server
+async function main() {
+  try {
+    // Connect Database
+    if (MONGO_URI) {
+      await mongoose.connect(MONGO_URI);
+      console.log('✅ Connected to MongoDB successfully.');
+    } else {
+      console.warn('⚠️ MONGO_URI missing. Database features will fail if required.');
+    }
+
+    // Register Handlers & Command Modules
+    setupUserCommands(bot, findUserByQuery);
+    setupAdCommands(bot, ADMIN_IDS);
+    // setupAdminCommands(bot, findUserByQuery, ADMIN_IDS);
+
+    // Launch Bot Polling
+    console.log('🚀 Starting Telegram Bot polling...');
+    await bot.start({
+      onStart: (botInfo) => {
+        console.log(`🤖 Bot online as @${botInfo.username}`);
+      },
     });
-  })
-  .catch((err) => {
-    console.error('❌ MongoDB Connection Error:', err);
-  });
+  } catch (error) {
+    console.error('❌ Failed to start the bot:', error);
+    process.exit(1);
+  }
+}
+
+// 🛑 Graceful Shutdown Signals (For Render / Heroku / Container Restarts)
+process.once('SIGINT', () => {
+  console.log('Stopping bot on SIGINT...');
+  bot.stop();
+});
+process.once('SIGTERM', () => {
+  console.log('Stopping bot on SIGTERM...');
+  bot.stop();
+});
+
+main();
